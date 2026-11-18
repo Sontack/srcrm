@@ -681,9 +681,9 @@
     },
     "importModal": {
       "title": "Import Contacts",
-      "desc": "Upload a CSV with a required <phoneCode>phone</phoneCode> column. Optional: <nameCode>name</nameCode>, <emailCode>email</emailCode>, <companyCode>company</companyCode>, <tagsCode>tags</tagsCode> (comma-separated; quote multi-tag cells).",
-      "uploadDropzone": "Click to choose a CSV file",
-      "uploadHint": ".csv up to your browser limit",
+      "desc": "Upload an Excel (.xlsx, .xls) or CSV file with a required <phoneCode>phone</phoneCode> column. Optional: <nameCode>name</nameCode>, <emailCode>email</emailCode>, <companyCode>company</companyCode>, <tagsCode>tags</tagsCode> (comma-separated).",
+      "uploadDropzone": "Click to choose an Excel (.xlsx, .xls) or CSV file",
+      "uploadHint": "Supports .xlsx, .xls, and .csv with auto-detected columns",
       "rowsReady": "{count} row ready",
       "rowsReady_plural": "{count} rows ready",
       "preview": "Preview · first {count}",
@@ -2462,6 +2462,51 @@
       "name": "Follow-up Reminder",
       "description": "Send a nudge if a contact has not replied within 24 hours.",
       "text": "Just circling back — did you have any other questions for us? Happy to help!"
+    },
+    "ai_customer_support": {
+      "name": "AI Customer Support Assistant",
+      "description": "Process incoming WhatsApp messages and respond intelligently based on your knowledge base and business rules.",
+      "text": "Hello! I am your AI assistant. How can I help you today?"
+    },
+    "auto_faq_reply": {
+      "name": "Automatic FAQ Reply",
+      "description": "Instantly answers common customer questions using verified FAQs.",
+      "keywords": "faq,question,help,timing,address,location",
+      "text": "Thanks for reaching out! Here is the information from our FAQ knowledge base."
+    },
+    "auto_price_inquiry": {
+      "name": "Automatic Price Inquiry Reply",
+      "description": "Detects pricing inquiries and provides exact rates from your uploaded price list without hallucinating.",
+      "keywords": "price,cost,fee,rate,charge,how much",
+      "text": "Here are our current official rates. Let us know if you would like to proceed with any of these services!"
+    },
+    "document_info_reply": {
+      "name": "Document Information Reply",
+      "description": "Provides required documents checklist for applications and government services.",
+      "keywords": "document,documents,required,aadhaar,id,proof,papers",
+      "text": "Here is the list of required documents needed for your application."
+    },
+    "appointment_assistance": {
+      "name": "Appointment Assistance",
+      "description": "Guides customers to book appointments for shop or office visits.",
+      "keywords": "appointment,visit,book,timing,slot,meet",
+      "text": "We would love to see you! Our business hours are Monday to Saturday, 9 AM to 7 PM. Would you like to reserve a time slot?"
+    },
+    "human_handover": {
+      "name": "Human Handover",
+      "description": "Transfers conversation to a human operator when requested or when complex issues arise.",
+      "keywords": "human,agent,operator,person,talk,support,representative",
+      "text": "I am connecting you with one of our human support representatives right now. Please hold on a moment."
+    },
+    "custom_webhook": {
+      "name": "Custom Webhook Automation",
+      "description": "Trigger external HTTP webhook endpoints when specific messages or events occur.",
+      "text": "Your request has been received and routed to our backend processing system."
+    },
+    "n8n_trigger": {
+      "name": "n8n Workflow Trigger",
+      "description": "Triggers an n8n workflow for custom integrations, CRM sync, and advanced automated tasks.",
+      "text": "Your message has initiated our automated workflow in n8n."
     }
   },
   "StarterFlows": {

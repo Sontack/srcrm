@@ -367,6 +367,9 @@ export interface MessageTemplate {
   quality_score?: 'GREEN' | 'YELLOW' | 'RED';
   submission_error?: string;
   last_submitted_at?: string;
+  source?: 'meta' | 'n8n' | 'custom';
+  is_enabled?: boolean;
+  n8n_template_id?: string;
   created_at: string;
 }
 

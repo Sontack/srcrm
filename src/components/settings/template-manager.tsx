@@ -12,6 +12,7 @@ import {
   Pencil,
   RotateCcw,
   Upload,
+  Webhook,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import {
@@ -535,6 +536,19 @@ export function TemplateManager() {
               <RefreshCw className={`size-4 ${syncing ? 'animate-spin' : ''}`} />
               {syncing ? t('syncing') : t('syncFromMeta')}
             </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const params = new URLSearchParams(window.location.search);
+                params.set('tab', 'n8n');
+                window.location.search = params.toString();
+              }}
+              className="border-purple-500/40 text-purple-400 hover:bg-purple-500/10"
+              title="Import or manage templates from n8n"
+            >
+              <Webhook className="size-4" />
+              Import from n8n
+            </Button>
             <Button onClick={openCreate}>
               <Plus className="size-4" />
               {t('newTemplate')}
@@ -563,6 +577,11 @@ export function TemplateManager() {
                   <div className="space-y-2 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-medium text-foreground">{template.name}</h3>
+                      {template.source === 'n8n' && (
+                        <Badge className="text-xs border border-purple-500/40 bg-purple-500/10 text-purple-400">
+                          n8n
+                        </Badge>
+                      )}
                       <Badge
                         className={`text-xs border ${categoryColors[template.category] || ''}`}
                       >

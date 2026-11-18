@@ -16,6 +16,14 @@ import {
   Users,
   PhoneCall,
   Loader2,
+  Bot,
+  HelpCircle,
+  BadgeDollarSign,
+  FileCheck,
+  Calendar,
+  UserCheck,
+  Globe,
+  Webhook,
 } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
@@ -49,6 +57,14 @@ const TEMPLATE_ORDER: TemplateSlug[] = [
   "out_of_office",
   "lead_qualifier",
   "follow_up_reminder",
+  "ai_customer_support",
+  "auto_faq_reply",
+  "auto_price_inquiry",
+  "document_info_reply",
+  "appointment_assistance",
+  "human_handover",
+  "custom_webhook",
+  "n8n_trigger",
 ]
 
 const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
@@ -56,6 +72,14 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
   out_of_office: Clock,
   lead_qualifier: Users,
   follow_up_reminder: PhoneCall,
+  ai_customer_support: Bot,
+  auto_faq_reply: HelpCircle,
+  auto_price_inquiry: BadgeDollarSign,
+  document_info_reply: FileCheck,
+  appointment_assistance: Calendar,
+  human_handover: UserCheck,
+  custom_webhook: Globe,
+  n8n_trigger: Webhook,
 }
 
 export default function AutomationsPage() {

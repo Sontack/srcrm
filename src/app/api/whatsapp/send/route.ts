@@ -172,6 +172,15 @@ export async function POST(request: Request) {
         senderId: userId,
       })
 
+      // When a human operator manually sends a message, pause AI auto-reply on this conversation
+      await supabase
+        .from('conversations')
+        .update({
+          ai_autoreply_disabled: true,
+          handling_mode: 'human',
+        })
+        .eq('id', conversationId)
+
       return NextResponse.json({
         success: true,
         message_id: result.messageId,

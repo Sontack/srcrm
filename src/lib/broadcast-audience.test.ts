@@ -368,6 +368,40 @@ describe('countAudience', () => {
     expect(requests).toHaveLength(0);
   });
 
+  it('counts manual numbers without a query', async () => {
+    const { db, requests } = cappedPostgrest({});
+    const audience: AudienceConfig = {
+      type: 'manual',
+      manualContacts: [{ phone: '+919876543210' }, { phone: '+919876501234' }],
+    };
+    expect(await countAudience(db, audience)).toBe(2);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('supports gt and lt operators for custom fields', async () => {
+    const all = contacts(10);
+    const { db } = cappedPostgrest({
+      contact_custom_values: all.map((c, i) => ({
+        id: uuid('v', i),
+        contact_id: c.id,
+        custom_field_id: 'score-field',
+        value: String((i + 1) * 10), // 10, 20, 30 ... 100
+      })),
+    });
+
+    const gtAudience: AudienceConfig = {
+      type: 'custom_field',
+      customFields: [{ fieldId: 'score-field', operator: 'gt', value: '50' }],
+    };
+    expect(await countAudience(db, gtAudience)).toBe(5); // 60, 70, 80, 90, 100
+
+    const ltAudience: AudienceConfig = {
+      type: 'custom_field',
+      customFields: [{ fieldId: 'score-field', operator: 'lt', value: '40' }],
+    };
+    expect(await countAudience(db, ltAudience)).toBe(3); // 10, 20, 30
+  });
+
   it('returns null for a partially configured audience', async () => {
     const { db } = cappedPostgrest({});
     expect(await countAudience(db, { type: 'tags', tagIds: [] })).toBeNull();

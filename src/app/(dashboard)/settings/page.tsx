@@ -18,6 +18,8 @@ import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel'
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { InboxSettings } from '@/components/settings/inbox-settings';
 import { MembersTab } from '@/components/settings/members-tab';
+import { AiConfig } from '@/components/settings/ai-config';
+import { N8nSettings } from '@/components/settings/n8n-settings';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import {
   resolveSection,
@@ -82,6 +84,8 @@ function SettingsPageInner() {
     inbox: <InboxSettings />,
     deals: <DealsSettings />,
     members: <MembersTab />,
+    ai: <AiConfig />,
+    n8n: <N8nSettings />,
     api: <ApiKeysSettings />,
   };
 

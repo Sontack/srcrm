@@ -2462,6 +2462,51 @@
       "name": "Recordatorio de seguimiento",
       "description": "Envía un recordatorio si un contacto no ha respondido en 24 horas.",
       "text": "Solo para dar seguimiento: ¿tienes alguna otra pregunta? ¡Con gusto te ayudamos!"
+    },
+    "ai_customer_support": {
+      "name": "Asistente de soporte al cliente con IA",
+      "description": "Procesa mensajes entrantes de WhatsApp y responde de manera inteligente basándose en tu base de conocimientos y reglas de negocio.",
+      "text": "¡Hola! Soy tu asistente de IA. ¿En qué puedo ayudarte hoy?"
+    },
+    "auto_faq_reply": {
+      "name": "Respuesta automática de preguntas frecuentes",
+      "description": "Responde al instante preguntas comunes utilizando preguntas frecuentes verificadas.",
+      "keywords": "faq,pregunta,ayuda,horario,direccion,ubicacion",
+      "text": "¡Gracias por comunicarte! Aquí tienes la información de nuestra base de conocimientos."
+    },
+    "auto_price_inquiry": {
+      "name": "Respuesta automática de consulta de precios",
+      "description": "Detecta consultas de precios y proporciona tarifas exactas de tu lista de precios sin alucinar.",
+      "keywords": "precio,costo,tarifa,cuanto cuesta",
+      "text": "Aquí están nuestras tarifas oficiales actuales. ¡Avísanos si deseas proceder con alguno de estos servicios!"
+    },
+    "document_info_reply": {
+      "name": "Información de documentos requeridos",
+      "description": "Proporciona la lista de documentos requeridos para solicitudes y trámites.",
+      "keywords": "documento,documentos,requisito,requisitos,papeles",
+      "text": "Aquí tienes la lista de documentos necesarios para tu solicitud."
+    },
+    "appointment_assistance": {
+      "name": "Asistencia para citas",
+      "description": "Guía a los clientes para agendar citas para visitas en tienda u oficina.",
+      "keywords": "cita,visita,agendar,horario,reunion",
+      "text": "¡Nos encantará recibirte! Nuestro horario es de lunes a sábado, de 9 AM a 7 PM. ¿Deseas reservar un horario?"
+    },
+    "human_handover": {
+      "name": "Transferencia a operador humano",
+      "description": "Transfiere la conversación a un operador humano cuando se solicita o surgen temas complejos.",
+      "keywords": "humano,agente,operador,persona,representante",
+      "text": "Te estoy comunicando con uno de nuestros representantes humanos en este momento. Por favor espera un momento."
+    },
+    "custom_webhook": {
+      "name": "Automatización con Webhook personalizado",
+      "description": "Dispara endpoints de webhook HTTP externos cuando ocurren mensajes o eventos específicos.",
+      "text": "Tu solicitud ha sido recibida y enviada a nuestro sistema de procesamiento."
+    },
+    "n8n_trigger": {
+      "name": "Activador de flujo de n8n",
+      "description": "Activa un flujo de trabajo de n8n para integraciones personalizadas y tareas avanzadas.",
+      "text": "Tu mensaje ha iniciado nuestro flujo automatizado en n8n."
     }
   },
   "StarterFlows": {

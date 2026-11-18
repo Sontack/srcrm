@@ -65,7 +65,10 @@ export async function POST(request: Request, { params }: Params) {
       return NextResponse.json({ error: t('common.conversationNotFound') }, { status: 404 })
     }
 
-    const update: Record<string, unknown> = { ai_autoreply_disabled: paused }
+    const update: Record<string, unknown> = {
+      ai_autoreply_disabled: paused,
+      handling_mode: paused ? 'human' : 'ai',
+    }
 
     if (paused) {
       if (assignToMe) update.assigned_agent_id = userId

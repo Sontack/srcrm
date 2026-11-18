@@ -187,8 +187,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
   async function resolveAudience(audience: AudienceConfig): Promise<Contact[]> {
     const supabase = createClient();
-    return resolveAudienceContacts(supabase, audience, (rows) =>
-      upsertCsvContacts(supabase, rows),
+    return resolveAudienceContacts(
+      supabase,
+      audience,
+      (rows) => upsertCsvContacts(supabase, rows),
+      (rows) => upsertCsvContacts(supabase, rows),
     );
   }
 

@@ -23,6 +23,7 @@ import { resumeAwaitingReply, runAutomationsForTrigger } from '@/lib/automations
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { dispatchToN8n } from '@/lib/n8n/dispatch'
 import {
   applyBroadcastRecipientStatus,
   flagBroadcastReply,
@@ -929,6 +930,17 @@ async function processMessage(
     whatsapp_message_id: message.id,
     content_type: contentType,
     text: contentText,
+  })
+
+  // Also dispatch to n8n integration if configured
+  await dispatchToN8n(supabaseAdmin(), accountId, 'message.received', {
+    conversation_id: conversation.id,
+    contact_id: contactRecord.id,
+    whatsapp_message_id: message.id,
+    content_type: contentType,
+    text: contentText,
+    from: identity.phone || identity.waUserId || '',
+    name: identity.name,
   })
 }
 

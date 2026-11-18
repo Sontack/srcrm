@@ -2462,6 +2462,51 @@
       "name": "Lembrete de acompanhamento",
       "description": "Envie um lembrete se o contato não responder em 24 horas.",
       "text": "Passando para saber — ficou com mais alguma dúvida? Estamos à disposição!"
+    },
+    "ai_customer_support": {
+      "name": "Assistente de suporte ao cliente com IA",
+      "description": "Processe mensagens do WhatsApp e responda de forma inteligente com base na base de conhecimento e regras de negócio.",
+      "text": "Olá! Sou seu assistente de IA. Como posso ajudar você hoje?"
+    },
+    "auto_faq_reply": {
+      "name": "Resposta automática de perguntas frequentes",
+      "description": "Responda instantaneamente a dúvidas comuns usando perguntas frequentes verificadas.",
+      "keywords": "faq,duvida,ajuda,horario,endereco,localizacao",
+      "text": "Obrigado pelo contato! Aqui estão as informações da nossa base de conhecimento."
+    },
+    "auto_price_inquiry": {
+      "name": "Resposta automática de consulta de preços",
+      "description": "Detecta consultas de preços e fornece valores exatos da lista de preços sem alucinações.",
+      "keywords": "preco,valor,custo,taxa,quanto custa",
+      "text": "Aqui estão nossos valores oficiais atuais. Avise-nos se quiser prosseguir com algum destes serviços!"
+    },
+    "document_info_reply": {
+      "name": "Informações de documentos necessários",
+      "description": "Fornece lista de verificação de documentos necessários para solicitações.",
+      "keywords": "documento,documentos,necessario,requisitos,documentacao",
+      "text": "Aqui está a lista de documentos necessários para sua solicitação."
+    },
+    "appointment_assistance": {
+      "name": "Agendamento e atendimento",
+      "description": "Orienta os clientes a agendar horários para visitas presenciais.",
+      "keywords": "agendar,visita,horario,atendimento,marcar",
+      "text": "Será um prazer receber você! Nosso horário de funcionamento é de segunda a sábado, das 9h às 19h. Gostaria de reservar um horário?"
+    },
+    "human_handover": {
+      "name": "Transferência para atendente humano",
+      "description": "Transfere a conversa para um operador humano quando solicitado ou em casos complexos.",
+      "keywords": "humano,atendente,operador,pessoa,falar com atendente",
+      "text": "Estou transferindo você para um dos nossos atendentes humanos agora. Por favor, aguarde um instante."
+    },
+    "custom_webhook": {
+      "name": "Automação com Webhook personalizado",
+      "description": "Aciona endpoints de webhook HTTP externos quando mensagens ou eventos específicos ocorrem.",
+      "text": "Sua solicitação foi recebida e encaminhada ao nosso sistema de processamento."
+    },
+    "n8n_trigger": {
+      "name": "Gatilho de fluxo n8n",
+      "description": "Aciona um fluxo de trabalho do n8n para integrações e automações avançadas.",
+      "text": "Sua mensagem iniciou nosso fluxo automatizado no n8n."
     }
   },
   "StarterFlows": {

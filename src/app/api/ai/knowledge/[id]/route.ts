@@ -23,7 +23,7 @@ export async function GET(_request: Request, { params }: Params) {
     const { id } = await params
     const { data, error } = await supabase
       .from('ai_knowledge_documents')
-      .select('id, title, content, updated_at')
+      .select('id, title, content, category, metadata, updated_at')
       .eq('account_id', accountId)
       .eq('id', id)
       .maybeSingle()
@@ -62,9 +62,11 @@ export async function PATCH(request: Request, { params }: Params) {
       return NextResponse.json({ error: t('ai.knowledge.contentEmpty') }, { status: 400 })
     }
 
-    const update: Record<string, string> = {}
+    const update: Record<string, unknown> = {}
     if (title !== undefined) update.title = title
     if (content !== undefined) update.content = content
+    if (typeof body?.category === 'string') update.category = body.category
+    if (typeof body?.metadata === 'object' && body?.metadata !== null) update.metadata = body.metadata
 
     const { data: updated, error } = await supabase
       .from('ai_knowledge_documents')

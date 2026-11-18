@@ -27,6 +27,8 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Sparkles,
+  User,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -1098,6 +1100,52 @@ export function MessageThread({
               />
             </button>
           )}
+
+          {/* AI vs Human Handling mode badge & quick toggle */}
+          {(() => {
+            const isAiHandled = !conversation.ai_autoreply_disabled && !assignedAgentId;
+            return (
+              <button
+                type="button"
+                onClick={async () => {
+                  const nextPaused = isAiHandled;
+                  try {
+                    const res = await fetch(`/api/ai/autoreply/${conversation.id}`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ paused: nextPaused, assign_to_me: nextPaused }),
+                    });
+                    if (res.ok) {
+                      onAssignChange(conversation.id, nextPaused ? user?.id ?? null : null);
+                      toast.success(nextPaused ? "Transferred to Human Operator" : "Reactivated AI Assistant");
+                    }
+                  } catch {
+                    toast.error("Failed to change handling mode");
+                  }
+                }}
+                title={isAiHandled ? "Click to switch to human operator" : "Click to reactivate AI assistance"}
+                className="hidden sm:inline-flex"
+              >
+                {isAiHandled ? (
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 border-purple-500/40 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 text-[11px] cursor-pointer py-0.5"
+                  >
+                    <Sparkles className="size-3 text-purple-400" />
+                    AI Assistant
+                  </Badge>
+                ) : (
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[11px] cursor-pointer py-0.5"
+                  >
+                    <User className="size-3 text-emerald-400" />
+                    Human Handled
+                  </Badge>
+                )}
+              </button>
+            );
+          })()}
 
           {/* Status dropdown */}
           <DropdownMenu>

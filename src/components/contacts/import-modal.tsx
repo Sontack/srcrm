@@ -4,14 +4,16 @@ import { useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import {
-  dedupeByPhone,
   isUniqueViolation,
   normalizeKey,
 } from '@/lib/contacts/dedupe';
 import {
-  parseContactCsv,
-  type ParsedContactRow,
-} from '@/lib/contacts/parse-contact-csv';
+  parseExcelOrCsv,
+  generateErrorReportCsv,
+  type ColumnMapping,
+  type ParseExcelResult,
+  type ParsedContactRecord,
+} from '@/lib/excel-helper';
 import {
   assignImportedContactTags,
   resolveImportTagIds,
@@ -30,12 +32,14 @@ import {
 import { Button } from '@/components/ui/button';
 import {
   Upload,
-  FileText,
+  FileSpreadsheet,
   Loader2,
   CheckCircle,
   XCircle,
   AlertTriangle,
   Tag,
+  Download,
+  Settings2,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
@@ -132,13 +136,14 @@ export function ImportModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
-  const [parsedRows, setParsedRows] = useState<ParsedContactRow[]>([]);
-  const [hasTagsColumn, setHasTagsColumn] = useState(false);
-  const [hasCompanyColumn, setHasCompanyColumn] = useState(false);
-  const [tagColorByKey, setTagColorByKey] = useState<Map<string, string>>(
-    new Map()
-  );
+  const [fileBuffer, setFileBuffer] = useState<ArrayBuffer | null>(null);
+  const [parsedData, setParsedData] = useState<ParseExcelResult | null>(null);
+  const [userMapping, setUserMapping] = useState<ColumnMapping>({ phone: '' });
+  const [showMapping, setShowMapping] = useState(false);
+  const [tagColorByKey, setTagColorByKey] = useState<Map<string, string>>(new Map());
+
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const [result, setResult] = useState<{
     imported: number;
     skipped: number;
@@ -146,14 +151,18 @@ export function ImportModal({
     failed: number;
     failedDetails: { phone: string; name?: string; reason: string }[];
     tagsAssigned: number;
+    errorReportCsv: string | null;
   } | null>(null);
 
   function reset() {
     setFile(null);
-    setParsedRows([]);
-    setHasTagsColumn(false);
-    setHasCompanyColumn(false);
+    setFileBuffer(null);
+    setParsedData(null);
+    setUserMapping({ phone: '' });
+    setShowMapping(false);
     setTagColorByKey(new Map());
+    setImporting(false);
+    setImportProgress(null);
     setResult(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -170,46 +179,58 @@ export function ImportModal({
     setFile(selected);
     setResult(null);
 
-    const text = await selected.text();
-    const {
-      rows,
-      hasTagsColumn: csvHasTags,
-      hasCompanyColumn: csvHasCompany,
-    } = parseContactCsv(text);
+    try {
+      const buffer = await selected.arrayBuffer();
+      setFileBuffer(buffer);
 
-    if (rows.length === 0) {
-      toast.error(t('toastNoValidRows'));
-      setParsedRows([]);
-      setHasTagsColumn(false);
-      setHasCompanyColumn(false);
-      setTagColorByKey(new Map());
-      return;
-    }
+      const parsed = parseExcelOrCsv(buffer);
 
-    setParsedRows(rows);
-    setHasTagsColumn(csvHasTags);
-    setHasCompanyColumn(csvHasCompany);
-
-    if (csvHasTags && accountId) {
-      const { data: tags } = await supabase
-        .from('tags')
-        .select('name, color')
-        .eq('account_id', accountId);
-
-      const colors = new Map<string, string>();
-      for (const tag of tags ?? []) {
-        const key = tag.name.trim().toLowerCase();
-        if (!colors.has(key)) colors.set(key, tag.color);
+      if (parsed.rawRows.length === 0) {
+        toast.error(t('toastNoValidRows'));
+        setParsedData(null);
+        return;
       }
-      setTagColorByKey(colors);
-    } else {
-      setTagColorByKey(new Map());
+
+      setParsedData(parsed);
+      setUserMapping(parsed.detectedMapping);
+
+      // Load existing tag colors
+      if (parsed.detectedMapping.tags && accountId) {
+        const { data: tags } = await supabase
+          .from('tags')
+          .select('name, color')
+          .eq('account_id', accountId);
+
+        const colors = new Map<string, string>();
+        for (const tag of tags ?? []) {
+          const key = tag.name.trim().toLowerCase();
+          if (!colors.has(key)) colors.set(key, tag.color);
+        }
+        setTagColorByKey(colors);
+      }
+    } catch (err) {
+      console.error('File parsing error:', err);
+      toast.error('Failed to parse file. Please ensure it is a valid .xlsx, .xls, or .csv file.');
     }
   }
 
+  function handleMappingChange(field: keyof ColumnMapping, value: string) {
+    if (!fileBuffer) return;
+    const newMapping = {
+      ...userMapping,
+      [field]: value === '__NONE__' ? undefined : value,
+    };
+    setUserMapping(newMapping);
+
+    // Re-parse with updated column mapping
+    const reParsed = parseExcelOrCsv(fileBuffer, newMapping);
+    setParsedData(reParsed);
+  }
+
   async function handleImport() {
-    if (parsedRows.length === 0) return;
+    if (!parsedData || parsedData.records.length === 0) return;
     setImporting(true);
+    setImportProgress({ current: 0, total: parsedData.validCount });
 
     try {
       const {
@@ -217,51 +238,40 @@ export function ImportModal({
       } = await supabase.auth.getSession();
       const user = session?.user;
       if (!user) throw new Error(t('notAuthenticated'));
-      if (!accountId)
-        throw new Error(t('notLinkedToAccount'));
+      if (!accountId) throw new Error(t('notLinkedToAccount'));
 
       let imported = 0;
-      let skipped = 0;
+      let skipped = parsedData.duplicateCount; // in-file dupes
       let failed = 0;
-      const failedDetails: { phone: string; name?: string; reason: string }[] =
-        [];
+      const invalidPhone = parsedData.invalidCount;
+      const failedDetails: { phone: string; name?: string; reason: string }[] = [];
 
-      // 1) De-dupe within the file by normalized phone (keep first).
-      //    Rows with no usable phone at all are counted separately —
-      //    they never duplicated anything, so lumping them into
-      //    `skipped` would misreport them as dupes (see dedupeByPhone).
-      const {
-        unique,
-        duplicates: inFileDupes,
-        invalid: invalidPhone,
-      } = dedupeByPhone(parsedRows);
-      skipped += inFileDupes;
+      // Valid records from parser
+      const validRecords = parsedData.records.filter((r) => r.valid);
 
-      // 2) Skip numbers already in this account. One read of the
-      //    generated `phone_normalized` column (migration 022) → Set.
+      // 1) Skip numbers already in this account
       const { data: existingRows } = await supabase
         .from('contacts')
         .select('phone_normalized')
         .eq('account_id', accountId);
+
       const existing = new Set(
         (existingRows ?? [])
-          .map(
-            (r) => (r as { phone_normalized: string | null }).phone_normalized
-          )
+          .map((r) => (r as { phone_normalized: string | null }).phone_normalized)
           .filter((p): p is string => !!p)
       );
 
-      const toInsert = unique.filter((row) => {
-        if (existing.has(normalizeKey(row.phone))) {
+      const toInsert: ParsedContactRecord[] = [];
+      for (const rec of validRecords) {
+        if (existing.has(normalizeKey(rec.phone))) {
           skipped++;
-          return false;
+        } else {
+          toInsert.push(rec);
         }
-        return true;
-      });
+      }
 
-      // 3) Resolve tag names → ids (admin+ may auto-create missing tags).
-      //    Skip the round-trip when the import carries no tag names.
-      const allTagNames = toInsert.flatMap((row) => row.tagNames);
+      // 2) Resolve tag names -> IDs
+      const allTagNames = toInsert.flatMap((rec) => rec.tags);
       let tagIdByKey = new Map<string, string>();
       let skippedNames: string[] = [];
       if (allTagNames.length > 0) {
@@ -274,21 +284,19 @@ export function ImportModal({
       }
 
       const tagAssignments: ContactTagAssignment[] = [];
-
-      // 4) Batch insert the genuinely-new rows in chunks of 50. The DB
-      //    unique index is the backstop: a 23505 (race, or a format
-      //    that normalizes equal) counts as skipped, not failed.
       const chunkSize = 50;
 
       for (let i = 0; i < toInsert.length; i += chunkSize) {
         const chunk = toInsert.slice(i, i + chunkSize);
-        const rows = chunk.map((row) => ({
+        setImportProgress({ current: Math.min(i, toInsert.length), total: toInsert.length });
+
+        const rows = chunk.map((r) => ({
           user_id: user.id,
           account_id: accountId,
-          phone: row.phone,
-          name: row.name || null,
-          email: row.email || null,
-          company: row.company || null,
+          phone: r.phone,
+          name: r.name || null,
+          email: r.email || null,
+          company: r.company || null,
         }));
 
         const { data, error } = await supabase
@@ -297,8 +305,7 @@ export function ImportModal({
           .select('id');
 
         if (error) {
-          // Retry individually so one bad/duplicate row doesn't sink
-          // the whole chunk.
+          // Retry individually so one bad row doesn't break the chunk
           for (let j = 0; j < rows.length; j++) {
             const row = rows[j];
             const source = chunk[j];
@@ -310,25 +317,17 @@ export function ImportModal({
 
             if (!singleErr && singleData) {
               imported++;
-              if (source.tagNames.length > 0) {
+              if (source.tags.length > 0) {
                 tagAssignments.push({
                   contactId: singleData.id,
-                  tagNames: source.tagNames,
+                  tagNames: source.tags,
                 });
               }
             } else if (isUniqueViolation(singleErr)) {
               skipped++;
             } else {
               failed++;
-              // Keep the actual DB error instead of discarding it —
-              // "N contacts failed" with no reason attached left no
-              // way to tell an RLS/constraint failure from a fluke,
-              // let alone which contact it was.
-              console.error(
-                '[contacts import] insert failed for',
-                row.phone,
-                singleErr
-              );
+              console.error('[contacts import] insert failed for', row.phone, singleErr);
               failedDetails.push({
                 phone: row.phone,
                 name: row.name ?? undefined,
@@ -341,22 +340,20 @@ export function ImportModal({
         } else {
           const inserted = data ?? [];
           imported += inserted.length;
-          // inserted[j] ↔ chunk[j] only holds because a single INSERT
-          // preserves RETURNING order. If this path is ever split into
-          // parallel inserts, zip by phone or returned id instead.
           for (let j = 0; j < inserted.length; j++) {
             const source = chunk[j];
-            if (!source || source.tagNames.length === 0) continue;
+            if (!source || source.tags.length === 0) continue;
             tagAssignments.push({
               contactId: inserted[j].id,
-              tagNames: source.tagNames,
+              tagNames: source.tags,
             });
           }
         }
       }
 
-      // 5) Wire tags onto the contacts we just created. Failure here must
-      //    not mask a successful contact import.
+      setImportProgress({ current: toInsert.length, total: toInsert.length });
+
+      // 3) Wire tags
       let tagsAssigned = 0;
       try {
         tagsAssigned = await assignImportedContactTags(
@@ -368,6 +365,21 @@ export function ImportModal({
         toast.warning(t('toastTagsWarning'));
       }
 
+      // Generate error report if there are any invalid or failed records
+      const allErrorsForReport = [
+        ...parsedData.invalidRecords,
+        ...failedDetails.map((f, idx) => ({
+          rowNumber: 100000 + idx,
+          raw: { Phone: f.phone, Name: f.name || '' },
+          reason: `Database error: ${f.reason}`,
+        })),
+      ];
+
+      const errorReportCsv =
+        allErrorsForReport.length > 0
+          ? generateErrorReportCsv(allErrorsForReport)
+          : null;
+
       setResult({
         imported,
         skipped,
@@ -375,7 +387,9 @@ export function ImportModal({
         failed,
         failedDetails,
         tagsAssigned,
+        errorReportCsv,
       });
+
       if (imported > 0) {
         toast.success(t('toastImported', { count: imported }));
         onImported();
@@ -386,7 +400,9 @@ export function ImportModal({
       if (skippedNames.length > 0) {
         const sample = skippedNames.slice(0, 3).join(', ');
         const more =
-          skippedNames.length > 3 ? t('toastTagsSkippedMore', { count: skippedNames.length - 3 }) : '';
+          skippedNames.length > 3
+            ? t('toastTagsSkippedMore', { count: skippedNames.length - 3 })
+            : '';
         toast.info(t('toastTagsSkipped', { sample, more }));
       }
       if (skipped > 0) {
@@ -403,39 +419,50 @@ export function ImportModal({
       toast.error(message);
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
   }
 
-  const preview = parsedRows.slice(0, PREVIEW_LIMIT);
-  // Tags: OR — show when the CSV declares a column or preview rows carry
-  // values, so an all-empty tags column still renders for validation.
-  const previewHasTags =
-    hasTagsColumn || preview.some((row) => row.tagNames.length > 0);
-  // Company: AND — hide unless the CSV declares it and preview has data,
-  // avoiding an all-dash column that wastes horizontal space.
-  const previewHasCompany =
-    hasCompanyColumn && preview.some((row) => row.company?.trim());
+  function downloadErrorReport() {
+    if (!result?.errorReportCsv) return;
+    const blob = new Blob([result.errorReportCsv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `import-error-report-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  const validRecords = parsedData?.records.filter((r) => r.valid) ?? [];
+  const preview = validRecords.slice(0, PREVIEW_LIMIT);
+  const previewHasCompany = !!userMapping.company;
+  const previewHasTags = !!userMapping.tags;
 
   const tagStats = useMemo(() => {
+    if (!parsedData) return { unique: 0, rowsWithTags: 0 };
     const names = new Set<string>();
     let rowsWithTags = 0;
-    for (const row of parsedRows) {
-      if (row.tagNames.length === 0) continue;
+    for (const row of parsedData.records) {
+      if (row.tags.length === 0) continue;
       rowsWithTags++;
-      for (const name of row.tagNames) names.add(name.trim().toLowerCase());
+      for (const name of row.tags) names.add(name.trim().toLowerCase());
     }
     return { unique: names.size, rowsWithTags };
-  }, [parsedRows]);
+  }, [parsedData]);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[min(90vh,720px)] flex-col gap-0 overflow-hidden border-border/80 bg-popover p-0 text-popover-foreground sm:max-w-2xl">
+      <DialogContent className="flex max-h-[min(92vh,760px)] flex-col gap-0 overflow-hidden border-border/80 bg-popover p-0 text-popover-foreground sm:max-w-2xl">
         <div className="shrink-0 space-y-4 border-b border-border/80 px-6 pt-6 pb-5">
           <DialogHeader className="gap-1.5">
             <DialogTitle className="text-lg text-popover-foreground">
               {t('title')}
             </DialogTitle>
-            <DialogDescription className="leading-relaxed text-muted-foreground"
+            <DialogDescription
+              className="leading-relaxed text-muted-foreground"
               dangerouslySetInnerHTML={{
                 __html: t.markup('desc', {
                   phoneCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
@@ -443,18 +470,18 @@ export function ImportModal({
                   emailCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
                   companyCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
                   tagsCode: (chunks) => `<code class="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">${chunks}</code>`,
-                })
+                }),
               }}
             />
           </DialogHeader>
 
+          {/* File Upload Dropzone */}
           <div
             role="button"
             tabIndex={0}
             onClick={() => fileInputRef.current?.click()}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ')
-                fileInputRef.current?.click();
+              if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
             }}
             className={cn(
               'group flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed p-5 transition-all',
@@ -466,7 +493,7 @@ export function ImportModal({
             {file ? (
               <>
                 <div className="bg-primary/15 ring-primary/25 flex size-10 items-center justify-center rounded-lg ring-1">
-                  <FileText className="text-primary size-5" />
+                  <FileSpreadsheet className="text-primary size-5" />
                 </div>
                 <p
                   className="max-w-full truncate px-2 text-sm font-medium text-popover-foreground"
@@ -474,9 +501,21 @@ export function ImportModal({
                 >
                   {truncateFilename(file.name)}
                 </p>
-                <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {t('rowsReady', { count: parsedRows.length })}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400">
+                    {parsedData?.validCount ?? 0} valid contacts
+                  </span>
+                  {(parsedData?.duplicateCount ?? 0) > 0 && (
+                    <span className="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-400">
+                      {parsedData?.duplicateCount} in-file duplicates
+                    </span>
+                  )}
+                  {(parsedData?.invalidCount ?? 0) > 0 && (
+                    <span className="rounded-full bg-red-500/10 px-2.5 py-0.5 text-[11px] font-medium text-red-400">
+                      {parsedData?.invalidCount} invalid
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <>
@@ -496,14 +535,158 @@ export function ImportModal({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
             onChange={handleFileChange}
             className="hidden"
           />
+
+          {/* Column Mapping Toggle & Config */}
+          {parsedData && parsedData.headers.length > 0 && !result && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowMapping((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                >
+                  <Settings2 className="size-3.5" />
+                  {showMapping ? 'Hide Column Mapping' : 'Customize Column Mapping'}
+                </button>
+                <span className="text-[11px] text-muted-foreground">
+                  {parsedData.headers.length} columns detected
+                </span>
+              </div>
+
+              {showMapping && (
+                <div className="rounded-lg border border-border/80 bg-background/50 p-3 space-y-2.5 text-xs">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        Phone Number <span className="text-destructive">*</span>
+                      </label>
+                      <select
+                        aria-label="Phone Number column"
+                        value={userMapping.phone || ''}
+                        onChange={(e) => handleMappingChange('phone', e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        {parsedData.headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        Full Name
+                      </label>
+                      <select
+                        aria-label="Full Name column"
+                        value={userMapping.name || '__NONE__'}
+                        onChange={(e) => handleMappingChange('name', e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        <option value="__NONE__">— None —</option>
+                        {parsedData.headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        Email Address
+                      </label>
+                      <select
+                        aria-label="Email Address column"
+                        value={userMapping.email || '__NONE__'}
+                        onChange={(e) => handleMappingChange('email', e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        <option value="__NONE__">— None —</option>
+                        {parsedData.headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        Company / Org
+                      </label>
+                      <select
+                        aria-label="Company or Organization column"
+                        value={userMapping.company || '__NONE__'}
+                        onChange={(e) => handleMappingChange('company', e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        <option value="__NONE__">— None —</option>
+                        {parsedData.headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        Tags (comma-separated)
+                      </label>
+                      <select
+                        aria-label="Tags column"
+                        value={userMapping.tags || '__NONE__'}
+                        onChange={(e) => handleMappingChange('tags', e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        <option value="__NONE__">— None —</option>
+                        {parsedData.headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
+        {/* Modal Body / Table Preview & Results */}
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          {preview.length > 0 && !result && (
+          {importing && (
+            <div className="my-6 flex flex-col items-center justify-center gap-3">
+              <Loader2 className="size-8 animate-spin text-primary" />
+              <p className="text-sm font-medium text-foreground">
+                Importing contacts...
+              </p>
+              {importProgress && (
+                <div className="w-full max-w-xs space-y-1 text-center">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full bg-primary transition-all duration-300"
+                      style={{
+                        width: `${Math.round((importProgress.current / Math.max(importProgress.total, 1)) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {importProgress.current} / {importProgress.total} contacts processed
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {preview.length > 0 && !result && !importing && (
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
@@ -513,7 +696,10 @@ export function ImportModal({
                   {tagStats.rowsWithTags > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-md bg-muted/90 px-2 py-0.5 text-[11px] text-muted-foreground">
                       <Tag className="text-primary/80 size-3" />
-                      {t('previewTags', { tags: tagStats.unique, contacts: tagStats.rowsWithTags })}
+                      {t('previewTags', {
+                        tags: tagStats.unique,
+                        contacts: tagStats.rowsWithTags,
+                      })}
                     </span>
                   )}
                 </div>
@@ -555,7 +741,7 @@ export function ImportModal({
                             <PreviewCell
                               value={row.phone}
                               mono
-                              maxWidth="max-w-[7.5rem]"
+                              maxWidth="max-w-[8.5rem]"
                             />
                           </td>
                           <td className="px-3 py-2 text-popover-foreground">
@@ -581,7 +767,7 @@ export function ImportModal({
                           {previewHasTags && (
                             <td className="px-3 py-2 align-top">
                               <ImportPreviewTags
-                                tagNames={row.tagNames}
+                                tagNames={row.tags}
                                 tagColorByKey={tagColorByKey}
                               />
                             </td>
@@ -593,18 +779,35 @@ export function ImportModal({
                 </div>
               </div>
 
-              {parsedRows.length > PREVIEW_LIMIT && (
+              {validRecords.length > PREVIEW_LIMIT && (
                 <p className="text-center text-[11px] text-muted-foreground">
-                  {t('moreRows', { count: parsedRows.length - PREVIEW_LIMIT })}
+                  {t('moreRows', { count: validRecords.length - PREVIEW_LIMIT })}
                 </p>
               )}
             </div>
           )}
 
           {result && (
-            <div className="rounded-xl border border-border bg-background/50 p-4">
-              <p className="text-sm font-medium text-popover-foreground">{t('importComplete')}</p>
-              <div className="mt-3 flex flex-wrap gap-3">
+            <div className="space-y-4 rounded-xl border border-border bg-background/50 p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-popover-foreground">
+                  {t('importComplete')}
+                </p>
+                {result.errorReportCsv && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={downloadErrorReport}
+                    className="h-8 gap-1.5 border-border text-xs text-primary hover:bg-primary/10"
+                  >
+                    <Download className="size-3.5" />
+                    Download Error Report (.csv)
+                  </Button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-3">
                 {result.imported > 0 && (
                   <div className="text-primary flex items-center gap-1.5 text-sm">
                     <CheckCircle className="size-4 shrink-0" />
@@ -629,9 +832,6 @@ export function ImportModal({
                       <AlertTriangle className="size-4 shrink-0" />
                       {t('resultInvalidPhone', { count: result.invalidPhone })}
                     </div>
-                    <p className="pl-[1.375rem] text-xs text-muted-foreground">
-                      {t('invalidPhoneHint')}
-                    </p>
                   </div>
                 )}
                 {result.failed > 0 && (
@@ -666,6 +866,7 @@ export function ImportModal({
           )}
         </div>
 
+        {/* Modal Footer */}
         <DialogFooter className="mt-0 shrink-0 gap-2 border-t border-border/80 bg-background/50 px-6 py-4 sm:justify-end">
           <Button
             type="button"
@@ -678,12 +879,14 @@ export function ImportModal({
           {!result && (
             <Button
               type="button"
-              disabled={parsedRows.length === 0 || importing}
+              disabled={validRecords.length === 0 || importing}
               onClick={handleImport}
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {importing && <Loader2 className="size-4 animate-spin" />}
-              {parsedRows.length > 0 ? t('importBtn', { count: parsedRows.length }) : t('importBtn', { count: 0 })}
+              {validRecords.length > 0
+                ? t('importBtn', { count: validRecords.length })
+                : t('importBtn', { count: 0 })}
             </Button>
           )}
         </DialogFooter>

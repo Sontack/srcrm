@@ -477,9 +477,19 @@ function ConversationItem({
       {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
-            {displayName}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="truncate text-sm font-medium text-foreground">
+              {displayName}
+            </span>
+            {!conversation.ai_autoreply_disabled && !conversation.assigned_agent_id && (
+              <span
+                className="shrink-0 flex items-center gap-0.5 rounded px-1 py-0.2 text-[9px] font-medium bg-purple-500/15 text-purple-400 border border-purple-500/25"
+                title="Handled by AI Assistant"
+              >
+                AI
+              </span>
+            )}
+          </div>
           <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
