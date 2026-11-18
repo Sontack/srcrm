@@ -2336,6 +2336,7 @@
     "description": "직접 키를 가져오는 AI 에이전트입니다 — 설정을 마친 뒤, 받은 편지함에서 고객에게 답하기 전에 플레이그라운드에서 테스트해 보세요.",
     "tabPlayground": "플레이그라운드",
     "tabSetup": "설정",
+    "tabKnowledge": "지식 베이스",
     "tabUsage": "사용량",
     "playground": {
       "title": "플레이그라운드",

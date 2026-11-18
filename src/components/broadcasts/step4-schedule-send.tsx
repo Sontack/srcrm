@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { ArrowLeft, Send, Loader2, Users, Save, CheckCircle2, AlertTriangle, Eye } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, Users, Save, CheckCircle2, AlertTriangle, Eye, Calendar, Clock } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 interface Step4Props {
@@ -24,6 +24,7 @@ interface Step4Props {
   template: MessageTemplate;
   audience: AudienceConfig;
   onSend: () => void;
+  onSchedule?: (scheduledAt: string) => void;
   onSaveDraft?: () => void;
   onBack: () => void;
   isProcessing: boolean;
@@ -36,6 +37,7 @@ export function Step4ScheduleSend({
   template,
   audience,
   onSend,
+  onSchedule,
   onSaveDraft,
   onBack,
   isProcessing,
@@ -45,6 +47,8 @@ export function Step4ScheduleSend({
   const [showConfirm, setShowConfirm] = useState(false);
   const [estimatedReach, setEstimatedReach] = useState<number>(0);
   const [loadingReach, setLoadingReach] = useState(true);
+  const [sendTiming, setSendTiming] = useState<'now' | 'schedule'>('now');
+  const [scheduledAt, setScheduledAt] = useState<string>('');
 
   useEffect(() => {
     async function calculateReach() {
@@ -124,6 +128,59 @@ export function Step4ScheduleSend({
             <p className="font-medium text-foreground">{template.language ?? 'en_US'}</p>
           </div>
         </div>
+      </div>
+
+      {/* Delivery Schedule Options */}
+      <div className="rounded-xl border border-border bg-card/50 p-4 space-y-3">
+        <p className="text-sm font-medium text-foreground">Delivery Schedule</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setSendTiming('now')}
+            className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-all ${
+              sendTiming === 'now'
+                ? 'border-primary bg-primary/10 text-primary font-medium'
+                : 'border-border bg-card text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <Send className="h-4 w-4 shrink-0" />
+            <div>
+              <div className="text-xs font-semibold text-foreground">Send Immediately</div>
+              <div className="text-[11px] text-muted-foreground">Launch campaign as soon as confirmed</div>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSendTiming('schedule')}
+            className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-all ${
+              sendTiming === 'schedule'
+                ? 'border-primary bg-primary/10 text-primary font-medium'
+                : 'border-border bg-card text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <Calendar className="h-4 w-4 shrink-0" />
+            <div>
+              <div className="text-xs font-semibold text-foreground">Schedule for Later</div>
+              <div className="text-[11px] text-muted-foreground">Pick a future date & time</div>
+            </div>
+          </button>
+        </div>
+
+        {sendTiming === 'schedule' && (
+          <div className="pt-2 border-t border-border/60 space-y-2">
+            <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-primary" />
+              Select Date & Time (Local Time):
+            </label>
+            <Input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              className="max-w-sm border-border bg-muted text-foreground text-xs"
+            />
+          </div>
+        )}
       </div>
 
       {/* Live Message Preview */}
@@ -214,56 +271,67 @@ export function Step4ScheduleSend({
             </Button>
           )}
 
-          <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
-            <DialogTrigger
-              render={
-                <Button
-                  disabled={!name.trim() || isProcessing || estimatedReach === 0}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  <Send className="h-4 w-4 mr-1.5" />
-                  {t('scheduleSend.sendNow')}
-                </Button>
-              }
-            />
-            <DialogContent className="border-border bg-popover sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle className="text-popover-foreground">
-                  Confirm Campaign Launch
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground space-y-2 pt-2">
-                  <div className="rounded-lg bg-card p-3 border border-border/80 space-y-1.5 text-xs">
-                    <p><strong className="text-foreground">Campaign:</strong> {name}</p>
-                    <p><strong className="text-foreground">Audience:</strong> {audienceLabel}</p>
-                    <p><strong className="text-foreground">Recipients:</strong> {estimatedReach.toLocaleString()} verified contacts</p>
-                    <p><strong className="text-foreground">Template:</strong> {template.name}</p>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    This broadcast will be dispatched immediately through your connected WhatsApp Business API provider.
-                  </p>
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter className="gap-2 sm:justify-end">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowConfirm(false)}
-                  className="border-border text-muted-foreground"
-                >
-                  {t('cancel')}
-                </Button>
-                <Button
-                  onClick={() => {
-                    setShowConfirm(false);
-                    onSend();
-                  }}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  <Send className="h-4 w-4 mr-1.5" />
-                  Confirm & Launch
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          {sendTiming === 'schedule' ? (
+            <Button
+              disabled={!name.trim() || isProcessing || estimatedReach === 0 || !scheduledAt}
+              onClick={() => onSchedule?.(new Date(scheduledAt).toISOString())}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              <Calendar className="h-4 w-4 mr-1.5" />
+              Schedule Campaign
+            </Button>
+          ) : (
+            <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
+              <DialogTrigger
+                render={
+                  <Button
+                    disabled={!name.trim() || isProcessing || estimatedReach === 0}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    <Send className="h-4 w-4 mr-1.5" />
+                    {t('scheduleSend.sendNow')}
+                  </Button>
+                }
+              />
+              <DialogContent className="border-border bg-popover sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="text-popover-foreground">
+                    Confirm Campaign Launch
+                  </DialogTitle>
+                  <DialogDescription className="text-muted-foreground space-y-2 pt-2">
+                    <div className="rounded-lg bg-card p-3 border border-border/80 space-y-1.5 text-xs">
+                      <p><strong className="text-foreground">Campaign:</strong> {name}</p>
+                      <p><strong className="text-foreground">Audience:</strong> {audienceLabel}</p>
+                      <p><strong className="text-foreground">Recipients:</strong> {estimatedReach.toLocaleString()} verified contacts</p>
+                      <p><strong className="text-foreground">Template:</strong> {template.name}</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      This broadcast will be dispatched immediately through your connected WhatsApp Business API provider.
+                    </p>
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter className="gap-2 sm:justify-end">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowConfirm(false)}
+                    className="border-border text-muted-foreground"
+                  >
+                    {t('cancel')}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setShowConfirm(false);
+                      onSend();
+                    }}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    <Send className="h-4 w-4 mr-1.5" />
+                    Confirm & Launch
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
         </div>
       </div>
     </div>

@@ -15,7 +15,15 @@ import {
   DollarSign,
   StickyNote,
   Plus,
+  Trash2,
+  X,
 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
@@ -35,8 +43,20 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+
+  const fetchAvailableTags = useCallback(async () => {
+    const supabase = createClient();
+    const { data } = await supabase.from("tags").select("*").order("name");
+    if (data) setAvailableTags(data);
+  }, []);
+
+  useEffect(() => {
+    fetchAvailableTags();
+  }, [fetchAvailableTags]);
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -74,12 +94,67 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
     }
   }, [contact]);
 
-  // Load on contact change. setContactData/setTags run inside async
-  // Supabase callbacks, not synchronously in the effect body.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchContactData();
   }, [fetchContactData]);
+
+  const handleAddTag = useCallback(
+    async (tagId: string) => {
+      if (!contact) return;
+      try {
+        const res = await fetch(`/api/contacts/${contact.id}/tags`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tag_id: tagId }),
+        });
+        if (res.ok) {
+          toast.success("Tag added to contact");
+          fetchContactData();
+          setTagPopoverOpen(false);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          toast.error(err.error || "Failed to add tag");
+        }
+      } catch {
+        toast.error("Network error adding tag");
+      }
+    },
+    [contact, fetchContactData]
+  );
+
+  const handleRemoveTag = useCallback(
+    async (tagId: string) => {
+      if (!contact) return;
+      try {
+        const res = await fetch(`/api/contacts/${contact.id}/tags`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tag_id: tagId }),
+        });
+        if (res.ok) {
+          toast.success("Tag removed");
+          setTags((prev) => prev.filter((t) => t.id !== tagId));
+        } else {
+          const err = await res.json().catch(() => ({}));
+          toast.error(err.error || "Failed to remove tag");
+        }
+      } catch {
+        toast.error("Network error removing tag");
+      }
+    },
+    [contact]
+  );
+
+  const handleDeleteNote = useCallback(async (noteId: string) => {
+    const supabase = createClient();
+    const { error } = await supabase.from("contact_notes").delete().eq("id", noteId);
+    if (!error) {
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      toast.success("Note removed");
+    } else {
+      toast.error("Failed to remove note");
+    }
+  }, []);
 
   const handleCopyPhone = useCallback(async () => {
     // Copies whatever the row displays — a BSUID-only contact has no
@@ -189,10 +264,57 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
           {/* Tags */}
           <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <TagIcon className="h-3 w-3" />
-              {tSidebar("tags")}
+            <div className="flex items-center justify-between px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <span className="flex items-center gap-2">
+                <TagIcon className="h-3 w-3" />
+                {tSidebar("tags")}
+              </span>
+
+              <Popover open={tagPopoverOpen} onOpenChange={setTagPopoverOpen}>
+                <PopoverTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 text-[11px] text-primary hover:text-primary/80 transition-colors font-normal"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add Tag
+                    </button>
+                  }
+                />
+                <PopoverContent align="end" className="w-48 p-2">
+                  <div className="text-xs font-semibold mb-2 px-1 text-foreground">Add Tag to Contact</div>
+                  {availableTags.length === 0 ? (
+                    <p className="text-xs text-muted-foreground px-1">No tags configured</p>
+                  ) : (
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {availableTags.map((at) => {
+                        const alreadyHas = tags.some((t) => t.id === at.id);
+                        return (
+                          <button
+                            key={at.id}
+                            disabled={alreadyHas}
+                            onClick={() => handleAddTag(at.id)}
+                            className={`w-full text-left px-2 py-1 rounded text-xs flex items-center justify-between transition-colors ${
+                              alreadyHas
+                                ? 'opacity-40 cursor-not-allowed bg-muted'
+                                : 'hover:bg-muted text-foreground'
+                            }`}
+                          >
+                            <span className="truncate">{at.name}</span>
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: at.color }}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
             </div>
+
             <div className="mt-2 flex flex-wrap gap-1">
               {tags.length === 0 ? (
                 <p className="px-1 text-xs text-muted-foreground">{tSidebar("noTags")}</p>
@@ -200,13 +322,21 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                 tags.map((tag) => (
                   <span
                     key={tag.contact_tag_id}
-                    className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                    className="group/tag inline-flex items-center gap-1 rounded-full pl-2 pr-1 py-0.5 text-[10px] font-medium"
                     style={{
                       backgroundColor: `${tag.color}20`,
                       color: tag.color,
                     }}
                   >
-                    {tag.name}
+                    <span>{tag.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag.id)}
+                      className="opacity-60 hover:opacity-100 hover:bg-black/20 rounded-full p-0.5 transition-opacity"
+                      title="Remove tag"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
                   </span>
                 ))
               )}
@@ -289,9 +419,17 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                 {notes.map((note) => (
                   <div
                     key={note.id}
-                    className="rounded-lg bg-muted px-3 py-2"
+                    className="group/note rounded-lg bg-muted px-3 py-2 relative"
                   >
-                    <p className="whitespace-pre-wrap text-xs text-muted-foreground">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteNote(note.id)}
+                      className="absolute top-2 right-2 opacity-0 group-hover/note:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                      title="Delete note"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                    <p className="whitespace-pre-wrap text-xs text-muted-foreground pr-4">
                       {note.note_text}
                     </p>
                     <p className="mt-1 text-[10px] text-muted-foreground">

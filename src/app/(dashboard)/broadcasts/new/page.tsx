@@ -60,6 +60,57 @@ export default function NewBroadcastPage() {
     }
   }
 
+  async function handleSchedule(scheduledAtIso: string) {
+    if (!template || !name.trim()) {
+      toast.error(t('toastGiveName'));
+      return;
+    }
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!user || !accountId) {
+      toast.error(t('toastNotSignedIn'));
+      return;
+    }
+
+    try {
+      const { data: broadcast, error } = await supabase
+        .from('broadcasts')
+        .insert({
+          user_id: user.id,
+          account_id: accountId,
+          name: name.trim(),
+          template_name: template.name,
+          template_language: template.language ?? 'en_US',
+          template_variables: variables,
+          audience_filter: audience as unknown as Record<string, unknown>,
+          status: 'scheduled',
+          scheduled_at: scheduledAtIso,
+          total_recipients: 0,
+          sent_count: 0,
+          delivered_count: 0,
+          read_count: 0,
+          replied_count: 0,
+          failed_count: 0,
+        })
+        .select()
+        .single();
+
+      if (error || !broadcast) {
+        toast.error(`Failed to schedule campaign: ${error?.message || 'Unknown error'}`);
+        return;
+      }
+
+      toast.success(`Campaign scheduled for ${new Date(scheduledAtIso).toLocaleString()}`);
+      router.push(`/broadcasts/${broadcast.id}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Scheduling error: ${msg}`);
+    }
+  }
+
   /**
    * Writes a draft broadcast row — no recipients, no sending. The user
    * can revisit it via the list page to finish the flow later. We
@@ -209,6 +260,7 @@ export default function NewBroadcastPage() {
               template={template}
               audience={audience}
               onSend={handleSend}
+              onSchedule={handleSchedule}
               onSaveDraft={handleSaveDraft}
               onBack={() => setCurrentStep(2)}
               isProcessing={isProcessing}

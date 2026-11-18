@@ -2336,6 +2336,7 @@
     "description": "Tu agente de IA con clave propia: configúralo y pruébalo en el playground antes de que responda a los clientes en la bandeja de entrada.",
     "tabPlayground": "Playground",
     "tabSetup": "Configuración",
+    "tabKnowledge": "Base de conocimientos",
     "tabUsage": "Uso",
     "playground": {
       "title": "Playground",

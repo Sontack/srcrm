@@ -2,20 +2,22 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Bot, Sparkles, Settings2, BarChart3 } from 'lucide-react';
+import { Bot, Sparkles, Settings2, BarChart3, BookOpen } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiUsageCard } from '@/components/agents/ai-usage';
 import { AiConfig } from '@/components/settings/ai-config';
+import { AiKnowledgeCard } from '@/components/settings/ai-knowledge';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 
-type Tab = 'playground' | 'setup' | 'usage';
+type Tab = 'playground' | 'setup' | 'knowledge' | 'usage';
 
 export default function AgentsPage() {
   const t = useTranslations('Agents');
-  const { accountRole } = useAuth();
+  const { accountRole, accountId } = useAuth();
   const canViewUsage = accountRole ? canEditSettings(accountRole) : false;
+  const canEdit = accountRole ? canEditSettings(accountRole) : false;
   const [tab, setTab] = useState<Tab>('playground');
   const [decided, setDecided] = useState(false);
 
@@ -63,6 +65,9 @@ export default function AgentsPage() {
             <TabsTrigger value="setup">
               <Settings2 className="mr-1.5 h-4 w-4" /> {t('tabSetup')}
             </TabsTrigger>
+            <TabsTrigger value="knowledge">
+              <BookOpen className="mr-1.5 h-4 w-4" /> {t('tabKnowledge')}
+            </TabsTrigger>
             {canViewUsage && (
               <TabsTrigger value="usage">
                 <BarChart3 className="mr-1.5 h-4 w-4" /> {t('tabUsage')}
@@ -76,6 +81,14 @@ export default function AgentsPage() {
 
           <TabsContent value="setup" className="mt-4">
             <AiConfig />
+          </TabsContent>
+
+          <TabsContent value="knowledge" className="mt-4">
+            <AiKnowledgeCard
+              accountId={accountId}
+              canEdit={canEdit}
+              hasEmbeddingsKey={true}
+            />
           </TabsContent>
 
           {canViewUsage && (

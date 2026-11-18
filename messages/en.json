@@ -2336,6 +2336,7 @@
     "description": "Your bring-your-own-key AI agent — set it up, then test it in the playground before it replies to customers in the inbox.",
     "tabPlayground": "Playground",
     "tabSetup": "Setup",
+    "tabKnowledge": "Knowledge Base",
     "tabUsage": "Usage",
     "playground": {
       "title": "Playground",

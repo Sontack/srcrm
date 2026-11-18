@@ -39,6 +39,7 @@ import {
   Search,
   Plus,
   Upload,
+  Download,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -50,6 +51,7 @@ import {
   Filter,
   X,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
@@ -358,6 +360,83 @@ export default function ContactsPage() {
     setPage(0);
   }
 
+  async function handleExport(format: 'xlsx' | 'csv') {
+    try {
+      toast.loading('Exporting contacts...', { id: 'export-contacts' });
+
+      interface ExportableContact {
+        name?: string | null;
+        phone?: string | null;
+        email?: string | null;
+        company?: string | null;
+        tags?: Tag[] | string;
+        created_at?: string;
+      }
+
+      let exportRows: ExportableContact[] = [];
+      if (selected.size > 0) {
+        exportRows = contacts.filter((c) => selected.has(c.id));
+      } else {
+        let query = supabase
+          .from('contacts')
+          .select('*, contact_tags(tag_id)')
+          .order('name', { ascending: true })
+          .limit(5000);
+
+        if (search.trim()) {
+          const pattern = contactSearchPattern(search);
+          query = query.or(
+            `name.ilike.${pattern},phone.ilike.${pattern},email.ilike.${pattern},company.ilike.${pattern}`
+          );
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+        exportRows = (data || []).map((c: any) => ({
+          ...c,
+          tags: (c.contact_tags || [])
+            .map((ct: any) => tagsMap[ct.tag_id]?.name)
+            .filter(Boolean)
+            .join(', '),
+        }));
+      }
+
+      if (exportRows.length === 0) {
+        toast.error('No contacts available to export', { id: 'export-contacts' });
+        return;
+      }
+
+      const dataToExport = exportRows.map((c) => ({
+        Name: c.name || '',
+        Phone: c.phone || '',
+        Email: c.email || '',
+        Company: c.company || '',
+        Tags: Array.isArray(c.tags)
+          ? c.tags.map((t: any) => t.name || t).join(', ')
+          : (c.tags || ''),
+        'Created At': c.created_at ? new Date(c.created_at).toISOString() : '',
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Contacts');
+
+      const filename = `contacts_export_${new Date().toISOString().slice(0, 10)}.${format}`;
+      if (format === 'csv') {
+        XLSX.writeFile(wb, filename, { bookType: 'csv' });
+      } else {
+        XLSX.writeFile(wb, filename, { bookType: 'xlsx' });
+      }
+
+      toast.success(`Exported ${exportRows.length} contacts successfully!`, {
+        id: 'export-contacts',
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to export contacts: ${msg}`, { id: 'export-contacts' });
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -389,6 +468,27 @@ export default function ContactsPage() {
             <Upload className="size-4" />
             {t('importBtn')}
           </GatedButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  className="border-border text-muted-foreground hover:bg-muted"
+                >
+                  <Download className="size-4 mr-1.5" />
+                  Export
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExport('xlsx')}>
+                Export as Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('csv')}>
+                Export as CSV (.csv)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <GatedButton
             canAct={canEdit}
             gateReason={tGate('reasons.addOrImportContacts')}
