@@ -27,7 +27,7 @@ export async function dispatchToN8n(
       .eq('account_id', accountId)
       .maybeSingle();
 
-    if (error || !integration || !integration.webhook_url) {
+    if (error || !integration) {
       return { dispatched: false };
     }
 
@@ -37,6 +37,19 @@ export async function dispatchToN8n(
 
     const enabledEvents: string[] = integration.events || [];
     if (!enabledEvents.includes(event)) {
+      return { dispatched: false };
+    }
+
+    // Determine target URL: check event-specific mapping first, fallback to default webhook_url
+    let targetWebhookUrl: string | null = integration.webhook_url;
+    if (integration.workflow_mappings && typeof integration.workflow_mappings === 'object') {
+      const mapped = (integration.workflow_mappings as Record<string, string>)[event];
+      if (mapped && typeof mapped === 'string' && mapped.startsWith('http')) {
+        targetWebhookUrl = mapped.trim();
+      }
+    }
+
+    if (!targetWebhookUrl) {
       return { dispatched: false };
     }
 
@@ -51,6 +64,7 @@ export async function dispatchToN8n(
       try {
         const apiKey = decrypt(integration.api_key_encrypted);
         headers['Authorization'] = `Bearer ${apiKey}`;
+        headers['X-N8N-API-KEY'] = apiKey;
       } catch (decErr) {
         console.error('[n8n dispatch] Failed to decrypt API key:', decErr);
       }
@@ -72,7 +86,7 @@ export async function dispatchToN8n(
       data,
     };
 
-    const res = await fetch(integration.webhook_url, {
+    const res = await fetch(targetWebhookUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),

@@ -20,8 +20,11 @@ export async function GET() {
     if (!data) {
       return NextResponse.json({
         configured: false,
+        instance_url: '',
+        editor_url: '',
         webhook_url: '',
-        events: ['message.received', 'contact.created', 'broadcast.completed'],
+        events: ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
+        workflow_mappings: {},
         status: 'disconnected',
         has_api_key: false,
         has_auth_header_value: false,
@@ -31,10 +34,13 @@ export async function GET() {
     return NextResponse.json({
       configured: true,
       id: data.id,
-      webhook_url: data.webhook_url,
-      events: data.events || ['message.received', 'contact.created', 'broadcast.completed'],
-      status: data.status,
-      has_api_key: !!data.api_key_encrypted,
+      instance_url: data.instance_url || '',
+      editor_url: data.editor_url || data.instance_url || '',
+      webhook_url: data.webhook_url || '',
+      events: data.events || ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
+      workflow_mappings: data.workflow_mappings || {},
+      status: data.status || 'disconnected',
+      has_api_key: !!(data.api_key_encrypted || data.api_key),
       auth_header_name: data.auth_header_name || '',
       has_auth_header_value: !!data.auth_header_value_encrypted,
       last_tested_at: data.last_tested_at,
@@ -51,11 +57,14 @@ export async function POST(req: Request) {
 
     const body = await req.json();
     const {
+      instance_url,
+      editor_url,
       webhook_url,
       api_key,
       auth_header_name,
       auth_header_value,
       events,
+      workflow_mappings,
       status,
     } = body;
 
@@ -82,18 +91,26 @@ export async function POST(req: Request) {
 
     const payload = {
       account_id: accountId,
-      webhook_url: webhook_url ? webhook_url.trim() : null,
+      instance_url: instance_url !== undefined ? (instance_url ? instance_url.trim() : null) : undefined,
+      editor_url: editor_url !== undefined ? (editor_url ? editor_url.trim() : null) : undefined,
+      webhook_url: webhook_url !== undefined ? (webhook_url ? webhook_url.trim() : null) : undefined,
       api_key_encrypted: apiKeyEncrypted,
-      auth_header_name: auth_header_name ? auth_header_name.trim() : null,
+      auth_header_name: auth_header_name !== undefined ? (auth_header_name ? auth_header_name.trim() : null) : undefined,
       auth_header_value_encrypted: authHeaderValueEncrypted,
-      events: Array.isArray(events) ? events : ['message.received', 'contact.created', 'broadcast.completed'],
-      status: status || (webhook_url ? 'connected' : 'disconnected'),
+      events: Array.isArray(events) ? events : ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
+      workflow_mappings: workflow_mappings && typeof workflow_mappings === 'object' ? workflow_mappings : {},
+      status: status || (instance_url || webhook_url ? 'connected' : 'disconnected'),
       updated_at: new Date().toISOString(),
     };
 
+    // Filter out undefined keys
+    const sanitizedPayload = Object.fromEntries(
+      Object.entries(payload).filter(([_, v]) => v !== undefined)
+    );
+
     const { error: upsertErr } = await supabase
       .from('n8n_integrations')
-      .upsert(payload, { onConflict: 'account_id' });
+      .upsert(sanitizedPayload, { onConflict: 'account_id' });
 
     if (upsertErr) {
       console.error('[n8n/config POST] upsert error:', upsertErr);

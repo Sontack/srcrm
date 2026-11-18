@@ -86,4 +86,42 @@ describe('n8n dispatch', () => {
       })
     );
   });
+
+  it('dispatches to event-specific workflow mapping URL when configured', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const mockSupabase = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: {
+                webhook_url: 'https://example.com/default-webhook',
+                workflow_mappings: {
+                  'message.received': 'https://example.com/custom-message-workflow',
+                },
+                events: ['message.received'],
+                status: 'connected',
+              },
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    } as unknown as SupabaseClient;
+
+    const res = await dispatchToN8n(mockSupabase, 'acct-1', 'message.received', {
+      text: 'hello custom',
+    });
+
+    expect(res.dispatched).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://example.com/custom-message-workflow',
+      expect.anything()
+    );
+  });
 });

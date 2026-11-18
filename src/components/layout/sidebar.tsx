@@ -22,6 +22,7 @@ import {
   UserCog,
   Users,
   UsersRound,
+  Webhook,
   Workflow,
   X,
   Zap,
@@ -98,6 +99,7 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
   { href: "/automations", labelKey: "automations", icon: Zap },
   { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
+  { href: "/n8n", labelKey: "n8nWorkspace", icon: Webhook },
   { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
 
