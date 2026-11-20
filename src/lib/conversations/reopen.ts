@@ -26,12 +26,16 @@ export async function reopenClosedConversation(
 
   const { error } = await db
     .from('conversations')
-    .update({ status: 'open', updated_at: new Date().toISOString() })
+    .update({
+      status: 'open',
+      handling_mode: 'ai',
+      ai_autoreply_disabled: false,
+      assigned_agent_id: null,
+      ai_reply_count: 0,
+      ai_handoff_summary: null,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', conversation.id)
-    // Re-checked in SQL, not just in the `if` above: the caller's row was
-    // read earlier in the request, so two concurrent inbound deliveries
-    // both holding a stale `status: 'closed'` must not be able to write
-    // 'open' back over an agent who re-closed the thread in between.
     .eq('status', 'closed')
 
   if (error) {

@@ -62,7 +62,10 @@ export async function dispatchInboundToAiReply(
     const db = supabaseAdmin()
 
     const config = await loadAiConfig(db, accountId)
-    if (!config || !config.autoReplyEnabled) return
+    if (!config || !config.autoReplyEnabled) {
+      console.log(`[ai auto-reply] Auto-reply not enabled for account ${accountId} (configured: ${!!config}, enabled: ${config?.autoReplyEnabled})`);
+      return
+    }
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level
@@ -79,20 +82,40 @@ export async function dispatchInboundToAiReply(
       .eq('is_active', true)
       .in('trigger_type', ['new_message_received', 'keyword_match'])
       .limit(1)
-    if (autoResponders && autoResponders.length > 0) return
+    if (autoResponders && autoResponders.length > 0) {
+      console.log(`[ai auto-reply] Active automation responder exists for account ${accountId}, standing down to prevent collision.`);
+      return
+    }
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
       .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count, handling_mode')
       .eq('id', conversationId)
       .maybeSingle()
-    if (convErr || !conv) return
-    if (conv.handling_mode === 'human') return // human operator owns this thread
-    if (conv.assigned_agent_id) return // a human owns this thread
-    if (conv.ai_autoreply_disabled) return // handed off / turned off here
-    // Cheap early-out; the authoritative cap check is the atomic claim
-    // below (this read can race a concurrent inbound).
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+    if (convErr || !conv) {
+      console.warn(`[ai auto-reply] Conversation ${conversationId} lookup failed:`, convErr)
+      return
+    }
+
+    // When an operator manually took over the conversation, handling_mode is 'human'
+    // or ai_autoreply_disabled is true.
+    if (conv.handling_mode === 'human' || conv.ai_autoreply_disabled) {
+      console.log(`[ai auto-reply] Paused: conversation ${conversationId} is currently assigned to human operator (ai_autoreply_disabled: ${conv.ai_autoreply_disabled}, handling_mode: ${conv.handling_mode})`)
+      return
+    }
+
+    // If assigned to a human and handling_mode is not explicitly 'ai', honor human ownership
+    if (conv.assigned_agent_id && conv.handling_mode !== 'ai') {
+      console.log(`[ai auto-reply] Paused: conversation ${conversationId} is assigned to agent ${conv.assigned_agent_id}`)
+      return
+    }
+
+    // Per-conversation reply cap check
+    const maxCap = config.autoReplyMaxPerConversation || 20;
+    if ((conv.ai_reply_count ?? 0) >= maxCap) {
+      console.log(`[ai auto-reply] Conversation ${conversationId} reached auto-reply limit (${conv.ai_reply_count}/${maxCap})`)
+      return
+    }
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -209,23 +232,36 @@ export async function dispatchInboundToAiReply(
       },
     )
     if (claimErr) {
-      // A real error here (vs. losing the cap race) is almost always a
-      // deploy issue — e.g. `claim_ai_reply_slot` not EXECUTE-able by the
-      // service role, or the migration not applied. Log it loudly: a
-      // silent return makes "auto-reply never fires" undiagnosable.
-      console.error('[ai auto-reply] claim_ai_reply_slot failed:', claimErr)
+      console.error('[ai auto-reply] claim_ai_reply_slot failed, attempting fallback direct update:', claimErr)
+      const { data: directUpd, error: directErr } = await db
+        .from('conversations')
+        .update({
+          ai_reply_count: (conv.ai_reply_count ?? 0) + 1,
+        })
+        .eq('id', conversationId)
+        .select('id')
+      if (directErr || !directUpd || directUpd.length === 0) {
+        console.error('[ai auto-reply] fallback direct update also failed:', directErr)
+        return
+      }
+    } else if (claimed !== true) {
+      console.log(`[ai auto-reply] Slot not claimed (claimed: ${claimed}) for conversation ${conversationId}`)
       return
     }
-    if (claimed !== true) return
 
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text,
-      aiGenerated: true,
-    })
+    try {
+      const sendRes = await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text,
+        aiGenerated: true,
+      })
+      console.log(`[ai auto-reply] Successfully replied to conversation ${conversationId} for contact ${contactId} (whatsapp_message_id: ${sendRes.whatsapp_message_id})`)
+    } catch (sendErr) {
+      console.error('[ai auto-reply] engineSendText delivery failed:', sendErr)
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

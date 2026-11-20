@@ -481,12 +481,19 @@ function ConversationItem({
             <span className="truncate text-sm font-medium text-foreground">
               {displayName}
             </span>
-            {!conversation.ai_autoreply_disabled && !conversation.assigned_agent_id && (
+            {!conversation.ai_autoreply_disabled && !conversation.assigned_agent_id ? (
               <span
-                className="shrink-0 flex items-center gap-0.5 rounded px-1 py-0.2 text-[9px] font-medium bg-purple-500/15 text-purple-400 border border-purple-500/25"
+                className="shrink-0 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium bg-purple-500/15 text-purple-400 border border-purple-500/25"
                 title="Handled by AI Assistant"
               >
                 AI
+              </span>
+            ) : (
+              <span
+                className="shrink-0 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                title="Handled by Human Operator"
+              >
+                Human
               </span>
             )}
           </div>

@@ -103,15 +103,21 @@ export function AiThreadBanner({
   // Account has no auto-reply → nothing to show. (Still loading → nothing.)
   if (!autoReplyOn) return null;
 
-  // Paused here (a human took over, or the model handed off).
-  if (paused) {
+  // Paused here (a human took over, an agent is assigned, or the model handed off).
+  const isHumanHandled = paused || !!assignedAgentId;
+
+  if (isHumanHandled) {
     return (
       <Banner tone="muted">
         <div className="min-w-0 flex-1">
           <p className="font-medium text-foreground">{t("pausedTitle")}</p>
-          {handoffSummary && (
+          {handoffSummary ? (
             <p className="truncate text-muted-foreground" title={handoffSummary}>
               {handoffSummary}
+            </p>
+          ) : (
+            <p className="truncate text-xs text-muted-foreground">
+              Human operator active. AI auto-reply is currently paused.
             </p>
           )}
         </div>
@@ -122,14 +128,11 @@ export function AiThreadBanner({
     );
   }
 
-  // Active, but a human already owns it → the bot won't fire; no banner.
-  if (assignedAgentId) return null;
-
-  // Active on this thread.
+  // Active on this thread (AI assistant is replying automatically).
   return (
     <Banner tone="primary">
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+        <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary animate-pulse" />
         <span className="truncate font-medium text-foreground">
           {t("activeText")}
         </span>

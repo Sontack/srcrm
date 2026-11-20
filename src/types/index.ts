@@ -195,6 +195,7 @@ export interface Conversation {
   ai_autoreply_disabled?: boolean;
   ai_reply_count?: number;
   ai_handoff_summary?: string | null;
+  handling_mode?: 'ai' | 'human' | string;
 }
 
 // ============================================================

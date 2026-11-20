@@ -97,6 +97,10 @@ interface MessageThreadProps {
     conversationId: string,
     assignedAgentId: string | null,
   ) => void;
+  onConversationUpdate?: (
+    conversationId: string,
+    updates: Partial<Conversation>,
+  ) => void;
   /**
    * On mobile, the thread is shown full-screen with the conversation list
    * hidden. This callback lets the page deselect the active conversation
@@ -183,6 +187,7 @@ export function MessageThread({
   onUpdateMessage,
   onStatusChange,
   onAssignChange,
+  onConversationUpdate,
   onBack,
   resyncToken = 0,
   onRefresh,
@@ -618,9 +623,11 @@ export function MessageThread({
           return;
         }
 
-        // Success — the realtime INSERT event will replace the temp bubble
-        // with the real DB row. If realtime hasn't arrived yet, at least
-        // flip status to 'sent' so the UI stops showing "sending".
+        // Success — when human operator sends, pause AI auto-reply locally
+        onConversationUpdate?.(conversation.id, {
+          ai_autoreply_disabled: true,
+          handling_mode: "human",
+        });
         onUpdateMessage(tempId, confirmedSendUpdate(payload));
       } catch (err) {
         console.error("Failed to send message:", err);
@@ -686,6 +693,10 @@ export function MessageThread({
           return;
         }
 
+        onConversationUpdate?.(conversation.id, {
+          ai_autoreply_disabled: true,
+          handling_mode: "human",
+        });
         onUpdateMessage(tempId, confirmedSendUpdate(data));
       } catch (err) {
         console.error("Failed to send media:", err);
@@ -740,6 +751,10 @@ export function MessageThread({
           return;
         }
 
+        onConversationUpdate?.(conversation.id, {
+          ai_autoreply_disabled: true,
+          handling_mode: "human",
+        });
         onUpdateMessage(tempId, confirmedSendUpdate(data));
       } catch (err) {
         console.error("Failed to send interactive message:", err);
@@ -830,6 +845,10 @@ export function MessageThread({
           return;
         }
 
+        onConversationUpdate?.(conversation.id, {
+          ai_autoreply_disabled: true,
+          handling_mode: "human",
+        });
         onUpdateMessage(tempId, confirmedSendUpdate(payload));
       } catch (err) {
         console.error("Failed to send template:", err);
@@ -945,9 +964,16 @@ export function MessageThread({
       if (!conversation) return;
 
       const supabase = createClient();
+      const updates: Record<string, unknown> = {
+        assigned_agent_id: agentId,
+      };
+      if (agentId) {
+        updates.ai_autoreply_disabled = true;
+        updates.handling_mode = "human";
+      }
       const { data, error } = await supabase
         .from("conversations")
-        .update({ assigned_agent_id: agentId })
+        .update(updates)
         .eq("id", conversation.id)
         .select("assigned_agent_id")
         .single();
@@ -968,8 +994,15 @@ export function MessageThread({
       }
 
       onAssignChange(conversation.id, assignedAgentId);
+      if (assignedAgentId) {
+        onConversationUpdate?.(conversation.id, {
+          assigned_agent_id: assignedAgentId,
+          ai_autoreply_disabled: true,
+          handling_mode: "human",
+        });
+      }
     },
-    [conversation, onAssignChange, t],
+    [conversation, onAssignChange, onConversationUpdate, t],
   );
 
   // Empty state — same WhatsApp-style doodle background as the active
@@ -1116,31 +1149,48 @@ export function MessageThread({
                       body: JSON.stringify({ paused: nextPaused, assign_to_me: nextPaused }),
                     });
                     if (res.ok) {
-                      onAssignChange(conversation.id, nextPaused ? user?.id ?? null : null);
-                      toast.success(nextPaused ? "Transferred to Human Operator" : "Reactivated AI Assistant");
+                      const newAssignee = nextPaused ? user?.id ?? null : null;
+                      onAssignChange(conversation.id, newAssignee);
+                      onConversationUpdate?.(conversation.id, {
+                        ai_autoreply_disabled: nextPaused,
+                        handling_mode: nextPaused ? "human" : "ai",
+                        assigned_agent_id: newAssignee ?? undefined,
+                      });
+                      toast.success(
+                        nextPaused
+                          ? "Transferred to Human Operator (AI auto-reply paused)"
+                          : "AI Handover Enabled — AI Assistant is now actively replying!"
+                      );
+                    } else {
+                      const j = await res.json().catch(() => ({}));
+                      toast.error(j?.error || "Failed to change handling mode");
                     }
                   } catch {
                     toast.error("Failed to change handling mode");
                   }
                 }}
-                title={isAiHandled ? "Click to switch to human operator" : "Click to reactivate AI assistance"}
-                className="hidden sm:inline-flex"
+                title={
+                  isAiHandled
+                    ? "AI is actively replying. Click to take over as Human Operator"
+                    : "Human operator active. Click to enable AI Handover"
+                }
+                className="inline-flex items-center"
               >
                 {isAiHandled ? (
                   <Badge
                     variant="outline"
-                    className="gap-1.5 border-purple-500/40 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 text-[11px] cursor-pointer py-0.5"
+                    className="gap-1.5 border-purple-500/40 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 text-[11px] cursor-pointer py-1 px-2.5 transition-colors font-medium shadow-sm"
                   >
-                    <Sparkles className="size-3 text-purple-400" />
-                    AI Assistant
+                    <Sparkles className="size-3 text-purple-400 animate-pulse" />
+                    AI Assistant: Active
                   </Badge>
                 ) : (
                   <Badge
                     variant="outline"
-                    className="gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[11px] cursor-pointer py-0.5"
+                    className="gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[11px] cursor-pointer py-1 px-2.5 transition-colors font-medium shadow-sm"
                   >
                     <User className="size-3 text-emerald-400" />
-                    Human Handled
+                    Human Handled (Enable AI)
                   </Badge>
                 )}
               </button>
@@ -1337,6 +1387,11 @@ export function MessageThread({
         assignedAgentId={assignedAgentId}
         currentUserId={user?.id}
         onChange={(patch) => {
+          onConversationUpdate?.(conversation.id, {
+            ai_autoreply_disabled: patch.ai_autoreply_disabled,
+            handling_mode: patch.ai_autoreply_disabled ? "human" : "ai",
+            assigned_agent_id: patch.assigned_agent_id ?? undefined,
+          });
           if ("assigned_agent_id" in patch) {
             onAssignChange(conversation.id, patch.assigned_agent_id ?? null);
           }
