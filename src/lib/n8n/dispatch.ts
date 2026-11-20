@@ -27,26 +27,41 @@ export async function dispatchToN8n(
       .eq('account_id', accountId)
       .maybeSingle();
 
-    if (error || !integration) {
+    const envWebhookUrl = (
+      process.env.N8N_WEBHOOK_URL ||
+      (process.env.N8N_INSTANCE_URL ? `${process.env.N8N_INSTANCE_URL}/webhook/crm-events` : '')
+    ).trim();
+    const envApiKey = (process.env.N8N_API_KEY || '').trim();
+
+    if ((error || !integration) && !envWebhookUrl) {
       return { dispatched: false };
     }
 
-    if (integration.status === 'disconnected') {
+    if (integration && integration.status === 'disconnected') {
       return { dispatched: false };
     }
 
-    const enabledEvents: string[] = integration.events || [];
+    const enabledEvents: string[] = integration?.events || [
+      'message.received',
+      'contact.created',
+      'broadcast.completed',
+      'conversation.handoff',
+    ];
     if (!enabledEvents.includes(event)) {
       return { dispatched: false };
     }
 
-    // Determine target URL: check event-specific mapping first, fallback to default webhook_url
-    let targetWebhookUrl: string | null = integration.webhook_url;
-    if (integration.workflow_mappings && typeof integration.workflow_mappings === 'object') {
+    // Determine target URL: check event-specific mapping first, fallback to DB webhook_url, then env
+    let targetWebhookUrl: string | null = null;
+    if (integration?.workflow_mappings && typeof integration.workflow_mappings === 'object') {
       const mapped = (integration.workflow_mappings as Record<string, string>)[event];
       if (mapped && typeof mapped === 'string' && mapped.startsWith('http')) {
         targetWebhookUrl = mapped.trim();
       }
+    }
+
+    if (!targetWebhookUrl) {
+      targetWebhookUrl = integration?.webhook_url || envWebhookUrl || null;
     }
 
     if (!targetWebhookUrl) {
@@ -60,17 +75,23 @@ export async function dispatchToN8n(
       'X-WACRM-Account-ID': accountId,
     };
 
-    if (integration.api_key_encrypted) {
+    let resolvedApiKey = envApiKey;
+    if (integration?.api_key_encrypted) {
       try {
-        const apiKey = decrypt(integration.api_key_encrypted);
-        headers['Authorization'] = `Bearer ${apiKey}`;
-        headers['X-N8N-API-KEY'] = apiKey;
+        resolvedApiKey = decrypt(integration.api_key_encrypted);
       } catch (decErr) {
         console.error('[n8n dispatch] Failed to decrypt API key:', decErr);
       }
+    } else if (integration?.api_key) {
+      resolvedApiKey = integration.api_key;
     }
 
-    if (integration.auth_header_name && integration.auth_header_value_encrypted) {
+    if (resolvedApiKey) {
+      headers['Authorization'] = `Bearer ${resolvedApiKey}`;
+      headers['X-N8N-API-KEY'] = resolvedApiKey;
+    }
+
+    if (integration?.auth_header_name && integration?.auth_header_value_encrypted) {
       try {
         const headerVal = decrypt(integration.auth_header_value_encrypted);
         headers[integration.auth_header_name] = headerVal;

@@ -463,35 +463,20 @@ export async function getN8nClientForAccount(
     };
   }
 
-  if (!data) {
-    return {
-      client: null,
-      config: {
-        instanceUrl: '',
-        editorUrl: '',
-        webhookUrl: '',
-        hasApiKey: false,
-        status: 'disconnected',
-        events: ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
-        workflowMappings: {},
-      },
-    };
-  }
-
   let decryptedApiKey = '';
-  if (data.api_key_encrypted) {
+  if (data?.api_key_encrypted) {
     try {
       decryptedApiKey = decrypt(data.api_key_encrypted);
     } catch (e) {
       console.error('[n8n] Failed to decrypt api_key_encrypted:', e);
     }
-  } else if (data.api_key) {
+  } else if (data?.api_key) {
     // Legacy plaintext support if any
     decryptedApiKey = data.api_key;
   }
 
   let decryptedAuthHeaderVal = '';
-  if (data.auth_header_value_encrypted) {
+  if (data?.auth_header_value_encrypted) {
     try {
       decryptedAuthHeaderVal = decrypt(data.auth_header_value_encrypted);
     } catch (e) {
@@ -499,15 +484,20 @@ export async function getN8nClientForAccount(
     }
   }
 
-  const instanceUrl = data.instance_url || '';
-  const editorUrl = data.editor_url || instanceUrl;
-  const webhookUrl = data.webhook_url || '';
+  const envInstanceUrl = process.env.N8N_INSTANCE_URL || '';
+  const envApiKey = process.env.N8N_API_KEY || '';
+  const envWebhookUrl = process.env.N8N_WEBHOOK_URL || (envInstanceUrl ? `${envInstanceUrl}/webhook/crm-events` : '');
+
+  const instanceUrl = (data?.instance_url || envInstanceUrl || '').trim();
+  const editorUrl = (data?.editor_url || process.env.N8N_EDITOR_URL || instanceUrl).trim();
+  const webhookUrl = (data?.webhook_url || envWebhookUrl || '').trim();
+  const finalApiKey = decryptedApiKey || envApiKey || '';
 
   const client = instanceUrl
     ? new N8nClient({
         instanceUrl,
-        apiKey: decryptedApiKey || undefined,
-        authHeaderName: data.auth_header_name || undefined,
+        apiKey: finalApiKey || undefined,
+        authHeaderName: data?.auth_header_name || undefined,
         authHeaderValue: decryptedAuthHeaderVal || undefined,
       })
     : null;
@@ -515,16 +505,16 @@ export async function getN8nClientForAccount(
   return {
     client,
     config: {
-      id: data.id,
+      id: data?.id,
       instanceUrl,
       editorUrl,
       webhookUrl,
-      hasApiKey: !!decryptedApiKey,
-      status: data.status || 'disconnected',
-      events: data.events || ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
-      workflowMappings: (data.workflow_mappings as Record<string, string>) || {},
-      lastTestedAt: data.last_tested_at,
-      lastError: data.last_error,
+      hasApiKey: !!finalApiKey,
+      status: data?.status || (instanceUrl ? 'connected' : 'disconnected'),
+      events: data?.events || ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
+      workflowMappings: (data?.workflow_mappings as Record<string, string>) || {},
+      lastTestedAt: data?.last_tested_at,
+      lastError: data?.last_error,
     },
   };
 }

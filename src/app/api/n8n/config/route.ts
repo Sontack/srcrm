@@ -17,30 +17,38 @@ export async function GET() {
       return NextResponse.json({ error: 'Failed to load n8n integration' }, { status: 500 });
     }
 
+    const envInstanceUrl = process.env.N8N_INSTANCE_URL || '';
+    const envApiKey = process.env.N8N_API_KEY || '';
+    const envWebhookUrl = process.env.N8N_WEBHOOK_URL || (envInstanceUrl ? `${envInstanceUrl}/webhook/crm-events` : '');
+
     if (!data) {
       return NextResponse.json({
-        configured: false,
-        instance_url: '',
-        editor_url: '',
-        webhook_url: '',
+        configured: !!envInstanceUrl,
+        instance_url: envInstanceUrl,
+        editor_url: process.env.N8N_EDITOR_URL || envInstanceUrl,
+        webhook_url: envWebhookUrl,
         events: ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
         workflow_mappings: {},
-        status: 'disconnected',
-        has_api_key: false,
+        status: envInstanceUrl ? 'connected' : 'disconnected',
+        has_api_key: !!envApiKey,
         has_auth_header_value: false,
       });
     }
 
+    const instanceUrl = data.instance_url || envInstanceUrl || '';
+    const editorUrl = data.editor_url || data.instance_url || process.env.N8N_EDITOR_URL || instanceUrl;
+    const webhookUrl = data.webhook_url || envWebhookUrl || '';
+
     return NextResponse.json({
-      configured: true,
+      configured: !!(instanceUrl || data.webhook_url),
       id: data.id,
-      instance_url: data.instance_url || '',
-      editor_url: data.editor_url || data.instance_url || '',
-      webhook_url: data.webhook_url || '',
+      instance_url: instanceUrl,
+      editor_url: editorUrl,
+      webhook_url: webhookUrl,
       events: data.events || ['message.received', 'contact.created', 'broadcast.completed', 'conversation.handoff'],
       workflow_mappings: data.workflow_mappings || {},
-      status: data.status || 'disconnected',
-      has_api_key: !!(data.api_key_encrypted || data.api_key),
+      status: data.status || (instanceUrl ? 'connected' : 'disconnected'),
+      has_api_key: !!(data.api_key_encrypted || data.api_key || envApiKey),
       auth_header_name: data.auth_header_name || '',
       has_auth_header_value: !!data.auth_header_value_encrypted,
       last_tested_at: data.last_tested_at,

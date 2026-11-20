@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: whatsapp-crm-n8n
+    env: docker
+    dockerfilePath: Dockerfile.n8n
+    plan: free
+    region: oregon
+    envVars:
+      - key: N8N_PORT
+        value: 10000
+      - key: N8N_PROTOCOL
+        value: https
+      - key: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+        value: true
+      - key: N8N_DEFAULT_BINARY_DATA_MODE
+        value: filesystem
+      - key: WEBHOOK_URL
+        fromService:
+          type: web
+          name: whatsapp-crm-n8n
+          property: host
+      - key: N8N_EDITOR_BASE_URL
+        fromService:
+          type: web
+          name: whatsapp-crm-n8n
+          property: host

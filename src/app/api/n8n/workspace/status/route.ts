@@ -31,16 +31,24 @@ export async function GET() {
 
     const testResult = await client.testConnection();
 
-    // Update status in DB
-    await supabase
-      .from('n8n_integrations')
-      .update({
-        status: testResult.ok ? 'connected' : 'error',
-        last_tested_at: new Date().toISOString(),
-        last_error: testResult.error || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('account_id', accountId);
+    // Upsert status in DB so the account row is automatically created/updated
+    if (config.instanceUrl) {
+      await supabase
+        .from('n8n_integrations')
+        .upsert(
+          {
+            account_id: accountId,
+            instance_url: config.instanceUrl,
+            editor_url: config.editorUrl || config.instanceUrl,
+            webhook_url: config.webhookUrl || `${config.instanceUrl}/webhook/crm-events`,
+            status: testResult.ok ? 'connected' : 'error',
+            last_tested_at: new Date().toISOString(),
+            last_error: testResult.error || null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'account_id' }
+        );
+    }
 
     return NextResponse.json({
       configured: true,
