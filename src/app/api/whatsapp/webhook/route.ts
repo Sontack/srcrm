@@ -882,29 +882,32 @@ async function processMessage(
   // a detached dispatch can be frozen part-way through: the log row is
   // inserted, then the steps never run. That is issue #301's failure mode
   // recurring one level down, and it's what issue #409 reported as runs
-  // logging zero steps. `runAutomationsForTrigger` owns its own try/catch
-  // and never throws; the `.catch` is belt-and-braces so one trigger
-  // type's failure can't skip the rest of the loop.
-  for (const triggerType of automationTriggers) {
-    await runAutomationsForTrigger({
-      accountId,
-      triggerType,
-      contactId: contactRecord.id,
-      context: {
-        message_text: inboundText,
-        conversation_id: conversation.id,
-        // Only set on interactive taps; drives the interactive_reply
-        // trigger's exact-id match.
-        interactive_reply_id: interactiveReplyId ?? undefined,
-      },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
+  // logging zero steps.
+  // Concurrently dispatch all active triggers using Promise.allSettled so
+  // independent triggers don't block each other or delay the AI auto-reply.
+  if (automationTriggers.length > 0) {
+    await Promise.allSettled(
+      automationTriggers.map((triggerType) =>
+        runAutomationsForTrigger({
+          accountId,
+          triggerType,
+          contactId: contactRecord.id,
+          context: {
+            message_text: inboundText,
+            conversation_id: conversation.id,
+            // Only set on interactive taps; drives the interactive_reply
+            // trigger's exact-id match.
+            interactive_reply_id: interactiveReplyId ?? undefined,
+          },
+        }).catch((err) => console.error('[automations] dispatch failed:', err)),
+      ),
+    )
   }
 
-  // AI auto-reply. Runs only for plain-text inbound the deterministic
-  // flow runner did NOT consume (flows win over the LLM), and only when
-  // the account has enabled it. Awaited inside `after()` (same reason as
-  // the webhook dispatch below); `dispatchInboundToAiReply` owns its
-  // eligibility gates + try/catch and never throws.
+  // AI auto-reply. Runs only for inbound messages the deterministic
+  // flow runner or waiting automation did NOT consume (flows/automations win),
+  // and only for non-interactive inbound text (menu numbers, questions, greetings,
+  // etc.). Button taps and interactive replies are handled by flows / automations.
   if (!contentConsumed && !interactiveReplyId && inboundText.trim()) {
     await dispatchInboundToAiReply({
       accountId,

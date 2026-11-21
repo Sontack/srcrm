@@ -347,4 +347,21 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(assign?.payload).toEqual({ assigned_agent_id: 'agent-7' })
     expect(assign?.isNull).toEqual(['assigned_agent_id'])
   })
+
+  it('delivers a safe fallback response and disables auto-reply when the LLM provider fails', async () => {
+    h.generateReply.mockRejectedValue(new Error('LLM Provider Rate Limit 429'))
+    await dispatchInboundToAiReply(ARGS)
+    // Safe fallback was sent to customer so they are not left on Seen without a reply
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        text: expect.stringContaining('Thank you for contacting us!'),
+      }),
+    )
+    expect(h.state.updatePayload).toMatchObject({
+      ai_autoreply_disabled: true,
+      handling_mode: 'human',
+    })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('LLM Provider Rate Limit 429')
+  })
 })

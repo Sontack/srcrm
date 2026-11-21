@@ -15,6 +15,10 @@ export interface ProviderArgs {
   timeoutMs: number
   /** Custom OpenAI-compatible base URL; omitted for native providers. */
   baseUrl?: string | null
+  /** Maximum completion tokens to generate. */
+  maxTokens?: number
+  /** Temperature sampling parameter (default: 0.3). */
+  temperature?: number
 }
 
 /**

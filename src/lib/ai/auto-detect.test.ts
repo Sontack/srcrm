@@ -31,6 +31,13 @@ describe('AI Auto-Detection', () => {
       expect(res.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai');
     });
 
+    it('detects NVIDIA NIM from nvapi- prefix', () => {
+      const res = detectProviderFromKey('nvapi-abcdef123456');
+      expect(res.provider).toBe('openai_compatible');
+      expect(res.providerName).toBe('NVIDIA NIM');
+      expect(res.baseUrl).toBe('https://integrate.api.nvidia.com/v1');
+    });
+
     it('detects OpenRouter from sk-or- prefix', () => {
       const res = detectProviderFromKey('sk-or-v1-abcdef123456');
       expect(res.provider).toBe('openai_compatible');

@@ -125,6 +125,9 @@ export function AiConfig() {
   const [detecting, setDetecting] = useState(false);
   const [detectedProviderName, setDetectedProviderName] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsList, setModelsList] = useState<
+    { id: string; name: string; description?: string; recommended?: boolean }[]
+  >([]);
   const [detectionSuccess, setDetectionSuccess] = useState(false);
 
   // Live Simulator Test State
@@ -134,6 +137,57 @@ export function AiConfig() {
   const [simHandoff, setSimHandoff] = useState(false);
 
   const loadedAccountIdRef = useRef<string | null>(null);
+
+  // Trigger Provider & Model Auto-Detection
+  const runAutoDetect = useCallback(async (explicitKey?: string, explicitBaseUrl?: string) => {
+    const keyToDetect = explicitKey !== undefined ? explicitKey : (keyEdited ? apiKey.trim() : '');
+    const urlToDetect = explicitBaseUrl !== undefined ? explicitBaseUrl : baseUrl.trim();
+    
+    setDetecting(true);
+    try {
+      const res = await fetch('/api/ai/detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: keyToDetect || undefined,
+          baseUrl: urlToDetect || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setProvider(data.provider);
+        setDetectedProviderName(data.providerName);
+        if (data.model) {
+          setModel(data.model);
+        }
+        if (Array.isArray(data.availableModels)) {
+          setAvailableModels(data.availableModels);
+        }
+        if (Array.isArray(data.modelsList)) {
+          setModelsList(data.modelsList);
+        }
+        if (data.baseUrl) {
+          setBaseUrl(data.baseUrl);
+        }
+        setDetectionSuccess(true);
+        if (explicitKey !== undefined || !keyEdited) {
+          toast.success(`Connected to ${data.providerName}! Selected model: ${data.model}`);
+        }
+      } else {
+        setDetectionSuccess(false);
+        if (explicitKey !== undefined) {
+          toast.error(data.error ?? 'Could not detect AI provider');
+        }
+      }
+    } catch {
+      setDetectionSuccess(false);
+      if (explicitKey !== undefined) {
+        toast.error('Network error during AI detection');
+      }
+    } finally {
+      setDetecting(false);
+    }
+  }, [apiKey, keyEdited, baseUrl]);
 
   // Fetch Existing Config
   const fetchConfig = useCallback(async () => {
@@ -162,20 +216,38 @@ export function AiConfig() {
         setEmbeddingsKey(data.has_embeddings_key ? MASKED_KEY : '');
         setEmbeddingsKeyEdited(false);
         setDetectionSuccess(true);
-        setDetectedProviderName(
+
+        const bUrl = data.base_url || '';
+        const detectedName =
           data.provider === 'openai'
             ? 'OpenAI'
             : data.provider === 'anthropic'
             ? 'Anthropic (Claude)'
-            : 'OpenAI-Compatible'
-        );
+            : bUrl.includes('generativelanguage.googleapis.com')
+            ? 'Google Gemini'
+            : bUrl.includes('openrouter.ai')
+            ? 'OpenRouter'
+            : bUrl.includes('groq.com')
+            ? 'Groq'
+            : bUrl.includes('nvidia.com')
+            ? 'NVIDIA NIM'
+            : bUrl.includes('deepseek.com')
+            ? 'DeepSeek'
+            : 'OpenAI-Compatible';
+
+        setDetectedProviderName(detectedName);
+
+        // Preload detected models using stored key
+        if (data.has_key) {
+          void runAutoDetect('', bUrl);
+        }
       }
     } catch {
       toast.error(t('loadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, runAutoDetect]);
 
   useEffect(() => {
     if (!accountId || loadedAccountIdRef.current === accountId) return;
@@ -189,42 +261,12 @@ export function AiConfig() {
     if (!keyEdited || !apiKey.trim() || apiKey === MASKED_KEY) return;
     if (apiKey.trim().length < 8) return;
 
-    const timer = setTimeout(async () => {
-      setDetecting(true);
-      try {
-        const res = await fetch('/api/ai/detect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            apiKey: apiKey.trim(),
-            baseUrl: baseUrl.trim() || undefined,
-          }),
-        });
-        const data = await res.json();
-        if (res.ok && data.ok) {
-          setProvider(data.provider);
-          setDetectedProviderName(data.providerName);
-          setModel(data.model);
-          if (Array.isArray(data.availableModels)) {
-            setAvailableModels(data.availableModels);
-          }
-          if (data.baseUrl) {
-            setBaseUrl(data.baseUrl);
-          }
-          setDetectionSuccess(true);
-          toast.success(`Detected ${data.providerName}! Selected model: ${data.model}`);
-        } else {
-          setDetectionSuccess(false);
-        }
-      } catch {
-        setDetectionSuccess(false);
-      } finally {
-        setDetecting(false);
-      }
+    const timer = setTimeout(() => {
+      void runAutoDetect(apiKey.trim(), baseUrl.trim());
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [apiKey, keyEdited, baseUrl]);
+  }, [apiKey, keyEdited, baseUrl, runAutoDetect]);
 
   const handleProviderChange = (next: AiProvider) => {
     setProvider(next);
@@ -595,10 +637,24 @@ export function AiConfig() {
 
                   <Button
                     variant="outline"
+                    onClick={() => runAutoDetect()}
+                    disabled={disabled || detecting || (!keyEdited && !hasStoredKey)}
+                    title="Detect provider and available models"
+                  >
+                    {detecting ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                    )}
+                    Detect
+                  </Button>
+
+                  <Button
+                    variant="outline"
                     onClick={handleTest}
                     disabled={disabled || testing || detecting || (!keyEdited && !hasStoredKey)}
                   >
-                    {testing || detecting ? (
+                    {testing ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
                       <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -620,7 +676,19 @@ export function AiConfig() {
 
                 <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-1">
                   <div className="text-[11px] uppercase font-bold text-muted-foreground">Selected Model</div>
-                  {availableModels.length > 0 ? (
+                  {modelsList.length > 0 ? (
+                    <select
+                      className="bg-transparent border-0 text-sm font-semibold text-foreground focus:outline-none w-full cursor-pointer truncate"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                    >
+                      {modelsList.map((m) => (
+                        <option key={m.id} value={m.id} className="bg-popover text-popover-foreground">
+                          {m.name || m.id}{m.recommended ? ' ★ (Recommended)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : availableModels.length > 0 ? (
                     <select
                       className="bg-transparent border-0 text-sm font-semibold text-foreground focus:outline-none w-full cursor-pointer truncate"
                       value={model}
@@ -890,14 +958,33 @@ export function AiConfig() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="ai-model-manual">{t('model')}</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="ai-model-manual">{t('model')}</Label>
+                    {(modelsList.length > 0 || availableModels.length > 0) && (
+                      <span className="text-[11px] text-muted-foreground">
+                        {modelsList.length || availableModels.length} detected
+                      </span>
+                    )}
+                  </div>
                   <Input
                     id="ai-model-manual"
+                    list="ai-detected-models-datalist"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                     placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
                     disabled={disabled}
                   />
+                  <datalist id="ai-detected-models-datalist">
+                    {modelsList.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name || m.id} {m.recommended ? '(Recommended)' : ''}
+                      </option>
+                    ))}
+                    {modelsList.length === 0 &&
+                      availableModels.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                  </datalist>
                 </div>
 
                 {provider === 'openai_compatible' && (

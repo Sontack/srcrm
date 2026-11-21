@@ -16,6 +16,10 @@ export interface GenerateArgs {
   systemPrompt: string
   /** Recent conversation turns, oldest first. */
   messages: ChatMessage[]
+  /** Optional token limit (default: MAX_OUTPUT_TOKENS = 350). */
+  maxTokens?: number
+  /** Optional sampling temperature (default: 0.3). */
+  temperature?: number
 }
 
 /**
@@ -24,7 +28,7 @@ export interface GenerateArgs {
  * of the raw text. Throws `AiError` on any provider/network failure.
  */
 export async function generateReply(args: GenerateArgs): Promise<GenerateResult> {
-  const { config, systemPrompt, messages } = args
+  const { config, systemPrompt, messages, maxTokens, temperature } = args
   const timeoutMs = aiRequestTimeoutMs()
   const providerArgs = {
     apiKey: config.apiKey,
@@ -33,6 +37,8 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
     messages,
     timeoutMs,
     baseUrl: config.baseUrl,
+    maxTokens,
+    temperature,
   }
 
   let result: { text: string; usage: AiUsage | null }

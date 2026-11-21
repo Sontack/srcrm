@@ -28,7 +28,9 @@ interface OpenAiResponse {
  * in `generateReply`).
  */
 export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult> {
-  const { apiKey, model, systemPrompt, messages, timeoutMs } = args
+  const { apiKey, model, systemPrompt, messages, timeoutMs, maxTokens, temperature } = args
+  const tokenLimit = maxTokens ?? MAX_OUTPUT_TOKENS
+  const isReasoningModel = model.startsWith('o1') || model.startsWith('o3')
 
   let res: Response
   try {
@@ -44,7 +46,8 @@ export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult
           { role: 'system', content: systemPrompt },
           ...mergeConsecutive(messages),
         ],
-        max_completion_tokens: MAX_OUTPUT_TOKENS,
+        max_completion_tokens: tokenLimit,
+        ...(isReasoningModel ? {} : { temperature: temperature ?? 0.3 }),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })

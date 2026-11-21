@@ -92,7 +92,7 @@ interface OpenAiCompatibleResponse {
 export async function generateOpenAiCompatible(
   args: ProviderArgs,
 ): Promise<ProviderResult> {
-  const { apiKey, model, systemPrompt, messages, timeoutMs, baseUrl } = args
+  const { apiKey, model, systemPrompt, messages, timeoutMs, baseUrl, maxTokens, temperature } = args
   const endpoint = normalizeOpenAiCompatibleBaseUrl(baseUrl ?? '')
 
   let deliverable = false
@@ -111,6 +111,9 @@ export async function generateOpenAiCompatible(
     })
   }
 
+  const tokenLimit = maxTokens ?? MAX_OUTPUT_TOKENS
+  const isReasoningModel = model.startsWith('o1') || model.startsWith('o3')
+
   let res: Response
   try {
     res = await fetch(endpoint, {
@@ -123,7 +126,8 @@ export async function generateOpenAiCompatible(
       body: JSON.stringify({
         model,
         messages: [{ role: 'system', content: systemPrompt }, ...mergeConsecutive(messages)],
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: tokenLimit,
+        ...(isReasoningModel ? {} : { temperature: temperature ?? 0.3 }),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })

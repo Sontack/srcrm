@@ -7,6 +7,7 @@ import { buildSystemPrompt } from './defaults'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
+import { pruneConversationContext } from './token-optimizer'
 import {
   engineSendText,
   loadAccountMetaCredentials,
@@ -160,11 +161,84 @@ export async function dispatchInboundToAiReply(
       knowledge,
     })
 
-    const { text, handoff, usage } = await generateReply({
-      config,
-      systemPrompt,
-      messages,
+    const prunedMessages = pruneConversationContext(messages, {
+      maxTurns: 8,
+      maxTotalChars: 1500,
     })
+
+    let generation: { text: string; handoff: boolean; usage: any } | null = null
+    let genError: unknown = null
+
+    try {
+      generation = await generateReply({
+        config,
+        systemPrompt,
+        messages: prunedMessages,
+        maxTokens: 350,
+        temperature: 0.3,
+      })
+    } catch (firstErr) {
+      genError = firstErr
+      console.warn('[ai auto-reply] first generate attempt failed, retrying once:', firstErr)
+      try {
+        generation = await generateReply({
+          config,
+          systemPrompt,
+          messages: prunedMessages,
+          maxTokens: 350,
+          temperature: 0.3,
+        })
+        genError = null
+      } catch (retryErr) {
+        genError = retryErr
+        console.error('[ai auto-reply] retry generate attempt also failed:', retryErr)
+      }
+    }
+
+    if (!generation || genError) {
+      // LLM failed after retry — provide a safe, polite fallback response so
+      // the customer is NEVER left on Seen with no response.
+      const userQuery = latestUserMessage(messages)
+      const isBengali =
+        /[\u0980-\u09FF]/.test(userQuery) ||
+        Boolean(config.systemPrompt && /[\u0980-\u09FF]/.test(config.systemPrompt))
+      const fallbackText = isBengali
+        ? 'ধন্যবাদ! আমরা আপনার বার্তাটি পেয়েছি। আমাদের একজন প্রতিনিধি শীঘ্রই আপনাকে উত্তর দেবেন।'
+        : 'Thank you for contacting us! We have received your message. Our team will get back to you shortly.'
+
+      try {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: fallbackText,
+          aiGenerated: true,
+        })
+        console.log(`[ai auto-reply] Safe fallback response delivered to conversation ${conversationId}`)
+      } catch (fallbackSendErr) {
+        console.error('[ai auto-reply] Safe fallback delivery failed:', fallbackSendErr)
+      }
+
+      await db
+        .from('conversations')
+        .update({
+          ai_autoreply_disabled: true,
+          ai_handoff_summary: `AI provider error: ${(genError as Error)?.message || 'Generation failed'}`,
+          handling_mode: 'human',
+        })
+        .eq('id', conversationId)
+      if (config.handoffAgentId) {
+        await db
+          .from('conversations')
+          .update({ assigned_agent_id: config.handoffAgentId })
+          .eq('id', conversationId)
+          .is('assigned_agent_id', null)
+      }
+      return
+    }
+
+    const { text, handoff, usage } = generation
 
     // Record token spend on the account's BYO key. Fire-and-forget so it
     // never adds latency to the customer-facing send: `logAiUsage`
