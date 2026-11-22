@@ -481,7 +481,14 @@ function ConversationItem({
             <span className="truncate text-sm font-medium text-foreground">
               {displayName}
             </span>
-            {!conversation.ai_autoreply_disabled && !conversation.assigned_agent_id ? (
+            {conversation.ai_handoff_summary && !conversation.ai_autoreply_disabled && !conversation.assigned_agent_id ? (
+              <span
+                className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/35 animate-pulse"
+                title="Customer requested human takeover — Click to open and take over"
+              >
+                Takeover Needed
+              </span>
+            ) : !conversation.ai_autoreply_disabled && !conversation.assigned_agent_id ? (
               <span
                 className="shrink-0 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium bg-purple-500/15 text-purple-400 border border-purple-500/25"
                 title="Handled by AI Assistant"

@@ -235,7 +235,9 @@ export async function fetchAvailableModels(
   // A. Google Gemini OpenAI endpoint
   if (targetBaseUrl.includes('googleapis.com')) {
     const knownGemini: DetectedModelItem[] = [
-      { id: 'models/gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Next-gen, ultra-fast & intelligent (Recommended)', recommended: true },
+      { id: 'models/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', description: 'Ultra-fast, high-quota, production-ready (Recommended)', recommended: true },
+      { id: 'models/gemini-flash-lite-latest', name: 'Gemini Flash-Lite Latest', description: 'Fast and reliable customer support model' },
+      { id: 'models/gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Intelligent multi-turn model' },
       { id: 'models/gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'High speed, token-efficient model' },
       { id: 'models/gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: 'Reliable high-speed workhorse' },
       { id: 'models/gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: 'Complex reasoning model' },
@@ -258,7 +260,9 @@ export async function fetchAvailableModels(
           : [];
         const chatModels = rawIds.filter((id) => id.includes('gemini') && !id.includes('embedding'));
         if (chatModels.length > 0) {
-          const rec = chatModels.find((m) => m.includes('2.5-flash')) ||
+          const rec = chatModels.find((m) => m.includes('2.5-flash-lite')) ||
+            chatModels.find((m) => m.includes('flash-lite-latest')) ||
+            chatModels.find((m) => m.includes('2.5-flash')) ||
             chatModels.find((m) => m.includes('2.0-flash')) ||
             chatModels.find((m) => m.includes('1.5-flash')) ||
             chatModels[0];
@@ -280,7 +284,7 @@ export async function fetchAvailableModels(
 
     return {
       models: knownGemini.map((m) => m.id),
-      recommendedModel: 'models/gemini-2.5-flash',
+      recommendedModel: 'models/gemini-2.5-flash-lite',
       modelsList: knownGemini,
     };
   }

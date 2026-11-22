@@ -164,8 +164,8 @@ export function pruneConversationContext(
   messages: ChatMessage[],
   opts: { maxTurns?: number; maxTotalChars?: number } = {}
 ): ChatMessage[] {
-  const maxTurns = opts.maxTurns ?? 6;
-  const maxTotalChars = opts.maxTotalChars ?? 1500;
+  const maxTurns = opts.maxTurns ?? 10;
+  const maxTotalChars = opts.maxTotalChars ?? 3500;
 
   if (!messages || messages.length === 0) return [];
 
@@ -195,17 +195,19 @@ export function pruneConversationContext(
 }
 
 /**
- * Optimized Knowledge retrieval limit — 2 chunks provide high accuracy
- * while using ~60% fewer prompt tokens than 5 chunks.
+ * Optimized Knowledge retrieval limit — retrieves sufficient excerpts
+ * for complete service lists, rules, and document requirements.
  */
-export function getOptimizedKnowledgeLimit(requested = 5): number {
-  return Math.max(1, Math.min(requested, 2));
+export function getOptimizedKnowledgeLimit(requested = 8): number {
+  return Math.max(1, requested);
 }
 
 /**
- * Truncate long knowledge chunks to prevent runaway prompt tokens.
+ * Truncate overly long knowledge chunks to prevent runaway prompt tokens.
+ * Uses a generous budget (2000 chars) so full service lists and multi-point
+ * document requirement checklists are never cut in half mid-sentence.
  */
-export function truncateKnowledgeChunk(chunk: string, maxChars = 550): string {
+export function truncateKnowledgeChunk(chunk: string, maxChars = 2000): string {
   const text = chunk.trim();
   if (text.length <= maxChars) return text;
 

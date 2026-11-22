@@ -226,7 +226,7 @@ describe('generateReply — OpenAI-compatible', () => {
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toBe('https://8.8.8.8/v1/chat/completions')
     expect(opts.headers.Authorization).toBe('Bearer sk-test')
-    expect(JSON.parse(opts.body).max_tokens).toBe(1024)
+    expect(JSON.parse(opts.body).max_tokens).toBe(1500)
     expect(opts.redirect).toBe('manual')
   })
 

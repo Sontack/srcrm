@@ -3,7 +3,7 @@ import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
-import { buildSystemPrompt } from './defaults'
+import { buildSystemPrompt, MAX_OUTPUT_TOKENS } from './defaults'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -147,12 +147,22 @@ export async function dispatchInboundToAiReply(
       await showTypingIndicator(db, accountId, inboundMessageId)
     }
 
+    // Build query text combining recent context for short follow-up questions
+    // (e.g. "আর কত টাকা লাগবে?", "15", "কী লাগবে?") so follow-ups maintain context.
+    const userMessages = messages.filter((m) => m.role === 'user').map((m) => m.content.trim())
+    const latestUser = userMessages[userMessages.length - 1] || ''
+    const prevUser = userMessages[userMessages.length - 2] || ''
+    const queryForKnowledge =
+      latestUser.length <= 40 && prevUser
+        ? `${prevUser} ${latestUser}`
+        : latestUser || latestUserMessage(messages)
+
     // Ground the reply in the account's knowledge base (best-effort).
     const knowledge = await retrieveKnowledge(
       db,
       accountId,
       config,
-      latestUserMessage(messages),
+      queryForKnowledge,
     )
 
     const systemPrompt = buildSystemPrompt({
@@ -162,8 +172,8 @@ export async function dispatchInboundToAiReply(
     })
 
     const prunedMessages = pruneConversationContext(messages, {
-      maxTurns: 8,
-      maxTotalChars: 1500,
+      maxTurns: 10,
+      maxTotalChars: 3500,
     })
 
     let generation: { text: string; handoff: boolean; usage: any } | null = null
@@ -174,7 +184,7 @@ export async function dispatchInboundToAiReply(
         config,
         systemPrompt,
         messages: prunedMessages,
-        maxTokens: 350,
+        maxTokens: MAX_OUTPUT_TOKENS,
         temperature: 0.3,
       })
     } catch (firstErr) {
@@ -185,7 +195,7 @@ export async function dispatchInboundToAiReply(
           config,
           systemPrompt,
           messages: prunedMessages,
-          maxTokens: 350,
+          maxTokens: MAX_OUTPUT_TOKENS,
           temperature: 0.3,
         })
         genError = null
@@ -223,18 +233,17 @@ export async function dispatchInboundToAiReply(
       await db
         .from('conversations')
         .update({
-          ai_autoreply_disabled: true,
           ai_handoff_summary: `AI provider error: ${(genError as Error)?.message || 'Generation failed'}`,
-          handling_mode: 'human',
         })
         .eq('id', conversationId)
-      if (config.handoffAgentId) {
-        await db
-          .from('conversations')
-          .update({ assigned_agent_id: config.handoffAgentId })
-          .eq('id', conversationId)
-          .is('assigned_agent_id', null)
-      }
+
+      void notifyOwnerTakeoverRequested(db, {
+        accountId,
+        conversationId,
+        contactId,
+        summary: `AI provider temporary failure: ${(genError as Error)?.message || 'Generation failed'}`,
+        handoffAgentId: config.handoffAgentId,
+      })
       return
     }
 
@@ -255,34 +264,56 @@ export async function dispatchInboundToAiReply(
     })
 
     if (handoff || !text) {
-      // The model can't (or shouldn't) answer — stop auto-replying on
-      // this thread and hand it to a human. We (a) pause the bot here
-      // (sticky until re-enabled), (b) route the conversation to the
-      // configured handoff agent — null leaves it in the shared queue —
-      // and (c) leave a short internal note so whoever picks it up has
-      // context. Assigning fires the `on_conversation_assigned` trigger,
-      // which notifies the agent.
+      // Customer requested human assistance or the model flagged that a human is needed.
+      // Strict Manual Takeover Rule: AI must NEVER automatically transfer a conversation
+      // to the human agent or disable auto-reply on its own.
+      // 1. Politely inform the customer that the team was notified.
+      // 2. Alert the owner with customer details and conversation link.
+      // 3. Wait for the owner's manual approval via the "Take Over" button.
+      const userQuery = latestUserMessage(messages)
+      const isBengali =
+        /[\u0980-\u09FF]/.test(userQuery) ||
+        Boolean(config.systemPrompt && /[\u0980-\u09FF]/.test(config.systemPrompt))
+
+      const waitMessage = isBengali
+        ? 'অনুগ্রহ করে কিছুক্ষণ অপেক্ষা করুন। আমাদের সাপোর্ট টিমকে জানানো হয়েছে এবং একজন প্রতিনিধি শীঘ্রই আপনাকে সহায়তা করবেন।'
+        : 'Please wait a moment. Our support team has been notified and will assist you shortly.'
+
+      try {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: waitMessage,
+          aiGenerated: true,
+        })
+        console.log(`[ai auto-reply] Sent takeover wait notice to conversation ${conversationId}`)
+      } catch (sendErr) {
+        console.error('[ai auto-reply] Failed to deliver takeover wait notice:', sendErr)
+      }
+
       const summary = buildHandoffSummary({
         messages,
         replyCount: conv.ai_reply_count ?? 0,
       })
+
+      // Flag takeover request on the conversation without automatically transferring control
       await db
         .from('conversations')
         .update({
-          ai_autoreply_disabled: true,
           ai_handoff_summary: summary,
-          handling_mode: 'human',
         })
         .eq('id', conversationId)
-      // Only set the assignee when a target is configured AND the thread
-      // isn't already owned — never stomp an existing human assignment.
-      if (config.handoffAgentId) {
-        await db
-          .from('conversations')
-          .update({ assigned_agent_id: config.handoffAgentId })
-          .eq('id', conversationId)
-          .is('assigned_agent_id', null)
-      }
+
+      // Send instant CRM notification to the owner/admins
+      void notifyOwnerTakeoverRequested(db, {
+        accountId,
+        conversationId,
+        contactId,
+        summary,
+        handoffAgentId: config.handoffAgentId,
+      })
       return
     }
 
@@ -379,5 +410,78 @@ async function showTypingIndicator(
     })
   } catch (err) {
     console.warn('[ai auto-reply] typing indicator failed (continuing):', err)
+  }
+}
+
+/**
+ * Notifies the account owner and admins that a customer has requested human takeover.
+ * Does NOT transfer control automatically — leaves AI active until the owner clicks "Take Over".
+ */
+export async function notifyOwnerTakeoverRequested(
+  db: ReturnType<typeof supabaseAdmin>,
+  args: {
+    accountId: string
+    conversationId: string
+    contactId: string
+    summary: string
+    handoffAgentId?: string | null
+  },
+): Promise<void> {
+  const { accountId, conversationId, contactId, summary, handoffAgentId } = args
+  try {
+    // 1. Fetch contact details (name and phone)
+    const { data: contact } = await db
+      .from('contacts')
+      .select('name, phone')
+      .eq('id', contactId)
+      .maybeSingle()
+
+    const contactName = contact?.name || contact?.phone || 'Customer'
+    const contactPhone = contact?.phone ? ` (${contact.phone})` : ''
+
+    // 2. Resolve recipients: configured handoff agent + account admins and owners
+    const recipientIds = new Set<string>()
+    if (handoffAgentId) {
+      recipientIds.add(handoffAgentId)
+    }
+
+    const { data: teamMembers } = await db
+      .from('profiles')
+      .select('user_id')
+      .eq('account_id', accountId)
+      .in('account_role', ['owner', 'admin'])
+
+    if (teamMembers) {
+      for (const m of teamMembers) {
+        if (m.user_id) recipientIds.add(m.user_id)
+      }
+    }
+
+    // 3. Insert notification for each recipient
+    const title = `Human Takeover Requested: ${contactName}`
+    const body = `Customer ${contactName}${contactPhone} requested human support: ${summary}. Click to open and take over.`
+
+    for (const userId of recipientIds) {
+      await db.from('notifications').insert({
+        account_id: accountId,
+        user_id: userId,
+        type: 'conversation_assigned',
+        conversation_id: conversationId,
+        contact_id: contactId,
+        title,
+        body,
+      })
+    }
+
+    // 4. Save takeover request event to conversation messages history
+    await db.from('messages').insert({
+      conversation_id: conversationId,
+      sender_type: 'bot',
+      content_type: 'text',
+      status: 'delivered',
+      content_text: `🔔 Customer requested human assistance (${contactName}${contactPhone}). AI waiting for manual takeover approval.`,
+    })
+  } catch (err) {
+    console.error('[ai auto-reply] notifyOwnerTakeoverRequested failed:', err)
   }
 }

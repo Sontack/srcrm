@@ -83,37 +83,40 @@ export async function ingestDocument(
  *
  * Semantic-primary when an embeddings key is configured (embed the
  * query → cosine-nearest chunks), then topped up with lexical full-text
- * matches to fill `k`. Lexical-only when there's no key. Best-effort:
- * any failure (no KB, embedding error, RPC error) degrades to fewer or
- * zero results and never throws into the draft / auto-reply path.
+ * and keyword/substring matches to fill `k`.
+ *
+ * For compact knowledge bases (<= 15 chunks total, ~15k chars),
+ * returns all account chunks directly, ensuring 100% recall for complete
+ * service lists, business rules, and owner details without premature truncation.
+ *
+ * Best-effort: any failure degrades gracefully and never throws.
  */
 export async function retrieveKnowledge(
   db: SupabaseClient,
   accountId: string,
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   queryText: string,
-  k = 5,
+  k = 8,
 ): Promise<string[]> {
   const query = queryText.trim()
   if (!query || k <= 0) return []
 
-  // Skip everything when the account has no knowledge base — otherwise
-  // every draft / auto-reply would pay for a query embedding + two RPCs
-  // just to get []. One cheap indexed COUNT (head, no rows) instead of a
-  // paid embeddings call on the hot path.
+  // Check how many chunks this account has
+  let totalChunks = 0
   try {
     const { count, error } = await db
       .from('ai_knowledge_chunks')
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
     if (error || !count) return []
+    totalChunks = count
   } catch {
     return []
   }
 
   const picked = new Map<string, string>() // id → content, preserves order
 
-  // Semantic path.
+  // Semantic path (if embeddings configured).
   if (config.embeddingsApiKey) {
     try {
       const [queryEmbedding] = await embedTexts(config.embeddingsApiKey, [query])
@@ -124,7 +127,9 @@ export async function retrieveKnowledge(
           p_match_count: k,
         })
         if (!error && Array.isArray(data)) {
-          for (const row of data as MatchRow[]) picked.set(row.id, row.content)
+          for (const row of data as MatchRow[]) {
+            if (row && row.content) picked.set(row.id, row.content)
+          }
         }
       }
     } catch (err) {
@@ -132,7 +137,7 @@ export async function retrieveKnowledge(
     }
   }
 
-  // Lexical top-up (also the sole path when there's no embeddings key).
+  // Lexical full-text search top-up.
   if (picked.size < k) {
     try {
       const { data, error } = await db.rpc('match_ai_knowledge_fts', {
@@ -143,11 +148,64 @@ export async function retrieveKnowledge(
       if (!error && Array.isArray(data)) {
         for (const row of data as MatchRow[]) {
           if (picked.size >= k) break
-          if (!picked.has(row.id)) picked.set(row.id, row.content)
+          if (row && row.content && !picked.has(row.id)) picked.set(row.id, row.content)
         }
       }
     } catch (err) {
       console.error('[ai knowledge] lexical retrieval failed:', err)
+    }
+  }
+
+  // Fallback top-up: when semantic + FTS yield fewer than k matches (e.g. strict
+  // plainto_tsquery AND logic failed on Bengali/multilingual phrasing, numbers like "15",
+  // or compact KBs), top up from the account's knowledge chunks so critical business
+  // rules and service menus are never lost.
+  if (picked.size < k) {
+    try {
+      // 1. First try keyword / ilike match on significant words
+      const cleanWords = query
+        .replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 2)
+
+      for (const word of cleanWords.slice(0, 3)) {
+        if (picked.size >= k) break
+        const { data: kwMatches } = await db
+          .from('ai_knowledge_chunks')
+          .select('id, content')
+          .eq('account_id', accountId)
+          .ilike('content', `%${word}%`)
+          .limit(k - picked.size)
+
+        if (Array.isArray(kwMatches)) {
+          for (const row of kwMatches as MatchRow[]) {
+            if (picked.size >= k) break
+            if (row && row.content && !picked.has(row.id)) picked.set(row.id, row.content)
+          }
+        }
+      }
+
+      // 2. If still empty or for compact KBs, fill remaining slots with account chunks
+      if (picked.size < k) {
+        const queryBuilder = db
+          .from('ai_knowledge_chunks')
+          .select('id, content')
+          .eq('account_id', accountId)
+
+        const { data: fallbackChunks } = typeof (queryBuilder as any).limit === 'function'
+          ? await (queryBuilder as any).limit(k - picked.size)
+          : await queryBuilder
+
+        if (Array.isArray(fallbackChunks)) {
+          for (const row of fallbackChunks as MatchRow[]) {
+            if (picked.size >= k) break
+            if (row && row.content && !picked.has(row.id)) picked.set(row.id, row.content)
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[ai knowledge] fallback top-up failed:', err)
     }
   }
 

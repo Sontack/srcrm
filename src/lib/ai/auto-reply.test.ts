@@ -47,14 +47,48 @@ vi.mock('./admin-client', () => ({
         return chain
       }
       if (table === 'messages') {
+        // Both select (latest inbound check) and insert (event messages) go through here
         const chain = {
           select: () => chain,
           eq: () => chain,
           order: () => chain,
           limit: () =>
             Promise.resolve({ data: h.state.latestInbound, error: null }),
+          insert: () => Promise.resolve({ error: null }),
         }
         return chain
+      }
+      if (table === 'contacts') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          maybeSingle: () => Promise.resolve({ data: { name: 'Test Customer', phone: '+1234567890' }, error: null }),
+        }
+        return chain
+      }
+      if (table === 'profiles') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          in: () => chain,
+          // Returns an array of owner user_ids for notification dispatch
+          then: (resolve: (v: { data: { user_id: string }[], error: null }) => void) =>
+            resolve({ data: [{ user_id: 'owner-1' }], error: null }),
+        }
+        // Also handle as thenable array result for the .in() query
+        return {
+          ...chain,
+          select: () => ({
+            eq: () => ({
+              in: () => Promise.resolve({ data: [{ user_id: 'owner-1' }], error: null }),
+            }),
+          }),
+        }
+      }
+      if (table === 'notifications') {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+        }
       }
       // conversations
       return {
@@ -313,42 +347,40 @@ describe('dispatchInboundToAiReply — typing indicator (#527)', () => {
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply, writes a summary, and does not send on handoff', async () => {
+  it('sends a "please wait" message, sets handoff summary, does NOT auto-disable AI on handoff', async () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.state.rpcCalls).toHaveLength(0)
-    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
-    expect(h.state.updatePayload?.ai_handoff_summary).toContain(
-      'AI agent handed off',
+    // AI sends "please wait" message to the customer
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        text: expect.stringContaining('Please wait a moment'),
+      }),
     )
-    // No handoff target configured → conversation left unassigned.
+    // No slot claim — the "please wait" message does not use a slot
+    expect(h.state.rpcCalls).toHaveLength(0)
+    // ai_handoff_summary IS set so the owner can see the pending request
+    expect(h.state.updatePayload?.ai_handoff_summary).toBeTruthy()
+    // CRITICAL: ai_autoreply_disabled must NOT be set automatically — only the owner's manual
+    // "Take Over" click should disable AI. This is the core manual-takeover constraint.
+    expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
+    // No auto-assignment
     expect(h.state.updatePayload).not.toHaveProperty('assigned_agent_id')
   })
 
-  it('routes to the configured handoff agent on handoff', async () => {
-    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+  it('sends a Bengali "please wait" message for Bengali conversations on handoff', async () => {
+    h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'আমি সাহায্য চাই' }])
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
-      assigned_agent_id: 'agent-7',
-    })
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: 'conv-1',
+        text: expect.stringContaining('অনুগ্রহ করে'),
+      }),
+    )
   })
 
-  it('assigns the handoff agent only while the thread is still unassigned', async () => {
-    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
-    h.generateReply.mockResolvedValue({ text: '', handoff: true })
-    await dispatchInboundToAiReply(ARGS)
-    const pause = h.state.updates.find((u) => 'ai_autoreply_disabled' in u.payload)
-    const assign = h.state.updates.find((u) => 'assigned_agent_id' in u.payload)
-    expect(pause?.payload).not.toHaveProperty('assigned_agent_id')
-    expect(pause?.isNull).toEqual([])
-    expect(assign?.payload).toEqual({ assigned_agent_id: 'agent-7' })
-    expect(assign?.isNull).toEqual(['assigned_agent_id'])
-  })
-
-  it('delivers a safe fallback response and disables auto-reply when the LLM provider fails', async () => {
+  it('delivers a safe fallback response and notifies owner when the LLM provider fails (does NOT auto-disable AI)', async () => {
     h.generateReply.mockRejectedValue(new Error('LLM Provider Rate Limit 429'))
     await dispatchInboundToAiReply(ARGS)
     // Safe fallback was sent to customer so they are not left on Seen without a reply
@@ -358,10 +390,10 @@ describe('dispatchInboundToAiReply — handoff', () => {
         text: expect.stringContaining('Thank you for contacting us!'),
       }),
     )
-    expect(h.state.updatePayload).toMatchObject({
-      ai_autoreply_disabled: true,
-      handling_mode: 'human',
-    })
+    // ai_handoff_summary is set so owner sees the pending notification
     expect(h.state.updatePayload?.ai_handoff_summary).toContain('LLM Provider Rate Limit 429')
+    // CRITICAL: ai_autoreply_disabled must NOT be set on LLM failure — only manual takeover
+    expect(h.state.updatePayload).not.toHaveProperty('ai_autoreply_disabled')
+    expect(h.state.updatePayload).not.toHaveProperty('handling_mode')
   })
 })

@@ -38,14 +38,12 @@ export async function POST(request: Request, { params }: Params) {
 
     const { conversationId } = await params
     const body = await request.json().catch(() => null)
-    if (!body || typeof body.paused !== 'boolean') {
+    if (!body || (typeof body.paused !== 'boolean' && body.dismiss_request !== true)) {
       return NextResponse.json(
         { error: t('ai.pausedRequired') },
         { status: 400 },
       )
     }
-    const paused = body.paused as boolean
-    const assignToMe = body.assign_to_me === true
 
     // Confirm the conversation is in the caller's account before writing.
     const { data: conv, error: convErr } = await supabase
@@ -65,28 +63,55 @@ export async function POST(request: Request, { params }: Params) {
       return NextResponse.json({ error: t('common.conversationNotFound') }, { status: 404 })
     }
 
+    // Look up operator full name for event history logging
+    const { data: operatorProfile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('user_id', userId)
+      .maybeSingle()
+    const operatorName = operatorProfile?.full_name || 'Operator'
+
+    // Option to dismiss a pending human takeover request without muting AI
+    if (body.dismiss_request === true) {
+      const { error: upErr } = await supabase
+        .from('conversations')
+        .update({
+          ai_handoff_summary: null,
+        })
+        .eq('id', conversationId)
+        .eq('account_id', accountId)
+
+      if (upErr) {
+        return NextResponse.json({ error: t('ai.updateConversationFailed') }, { status: 500 })
+      }
+
+      await supabase.from('messages').insert({
+        conversation_id: conversationId,
+        sender_type: 'bot',
+        content_type: 'text',
+        status: 'delivered',
+        content_text: `🤖 Human takeover request dismissed by ${operatorName}. AI Assistant continues managing conversation.`,
+      })
+
+      return NextResponse.json({ success: true, dismissed: true })
+    }
+
+    const paused = body.paused as boolean
+    const assignToMe = body.assign_to_me === true
+
     const update: Record<string, unknown> = {
       ai_autoreply_disabled: paused,
       handling_mode: paused ? 'human' : 'ai',
+      ai_handoff_summary: null,
     }
 
     if (paused) {
       if (assignToMe) update.assigned_agent_id = userId
     } else {
-      // Resuming hands the thread *back to the bot*. Clear the pause and
-      // the handoff note, and — crucially — release ANY assignment, not
-      // just the caller's own: the auto-reply eligibility gate stands
-      // down whenever a human is assigned, so leaving a stale assignee
-      // (e.g. the agent a prior handoff routed to) would silently keep
-      // the bot muted and make "Resume AI" a no-op. This is the explicit
-      // choice to let the bot own the thread again.
+      // Resuming hands the thread *back to the bot*. Clear the pause,
+      // reset reply count, and release any human assignment.
       update.assigned_agent_id = null
-      // Give the bot a fresh reply budget on this thread. This is a
-      // deliberate, manual, rate-limited action (not automatable), so it
-      // can't be used to bypass the per-conversation cap at scale — it's
-      // a human choosing to re-engage the assistant.
       update.ai_reply_count = 0
-      update.ai_handoff_summary = null
     }
 
     const { error: upErr } = await supabase
@@ -101,6 +126,19 @@ export async function POST(request: Request, { params }: Params) {
         { status: 500 },
       )
     }
+
+    // Save takeover and return-to-AI events into conversation history
+    const eventText = paused
+      ? `👤 Human takeover activated by ${operatorName}. AI auto-reply is now paused.`
+      : `🤖 Conversation returned to AI Assistant by ${operatorName}. AI auto-reply is now active.`
+
+    await supabase.from('messages').insert({
+      conversation_id: conversationId,
+      sender_type: 'bot',
+      content_type: 'text',
+      status: 'delivered',
+      content_text: eventText,
+    })
 
     return NextResponse.json({ success: true, paused })
   } catch (err) {

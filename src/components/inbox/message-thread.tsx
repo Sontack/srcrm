@@ -29,6 +29,7 @@ import {
   PanelRightClose,
   Sparkles,
   User,
+  AlertTriangle,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -1170,13 +1171,23 @@ export function MessageThread({
                   }
                 }}
                 title={
-                  isAiHandled
+                  conversation.ai_handoff_summary && !conversation.ai_autoreply_disabled && !assignedAgentId
+                    ? "Customer requested human takeover! Click to take over as Human Operator"
+                    : isAiHandled
                     ? "AI is actively replying. Click to take over as Human Operator"
-                    : "Human operator active. Click to enable AI Handover"
+                    : "Human operator active. Click to return control to AI Assistant"
                 }
                 className="inline-flex items-center"
               >
-                {isAiHandled ? (
+                {conversation.ai_handoff_summary && !conversation.ai_autoreply_disabled && !assignedAgentId ? (
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 text-[11px] cursor-pointer py-1 px-2.5 transition-colors font-semibold shadow-sm animate-pulse"
+                  >
+                    <AlertTriangle className="size-3 text-amber-400" />
+                    Takeover Requested (Click to Take Over)
+                  </Badge>
+                ) : isAiHandled ? (
                   <Badge
                     variant="outline"
                     className="gap-1.5 border-purple-500/40 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 text-[11px] cursor-pointer py-1 px-2.5 transition-colors font-medium shadow-sm"
@@ -1190,7 +1201,7 @@ export function MessageThread({
                     className="gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[11px] cursor-pointer py-1 px-2.5 transition-colors font-medium shadow-sm"
                   >
                     <User className="size-3 text-emerald-400" />
-                    Human Handled (Enable AI)
+                    Human Handled (Return to AI)
                   </Badge>
                 )}
               </button>
