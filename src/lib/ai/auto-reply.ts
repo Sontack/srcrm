@@ -8,6 +8,7 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { pruneConversationContext } from './token-optimizer'
+import type { GenerateResult } from './types'
 import {
   engineSendText,
   loadAccountMetaCredentials,
@@ -176,7 +177,7 @@ export async function dispatchInboundToAiReply(
       maxTotalChars: 3500,
     })
 
-    let generation: { text: string; handoff: boolean; usage: any } | null = null
+    let generation: GenerateResult | null = null
     let genError: unknown = null
 
     try {

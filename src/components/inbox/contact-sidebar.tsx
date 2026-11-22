@@ -3,14 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
-import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag } from "@/types";
 import {
   Phone,
   Mail,
   Copy,
   Check,
-  User,
   Tag as TagIcon,
   DollarSign,
   StickyNote,
@@ -48,17 +46,22 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
-  const fetchAvailableTags = useCallback(async () => {
+  useEffect(() => {
+    let ignore = false;
     const supabase = createClient();
-    const { data } = await supabase.from("tags").select("*").order("name");
-    if (data) setAvailableTags(data);
+    supabase
+      .from("tags")
+      .select("*")
+      .order("name")
+      .then(({ data }) => {
+        if (!ignore && data) setAvailableTags(data);
+      });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
-  useEffect(() => {
-    fetchAvailableTags();
-  }, [fetchAvailableTags]);
-
-  const fetchContactData = useCallback(async () => {
+  const refreshContactData = useCallback(async () => {
     if (!contact) return;
 
     const supabase = createClient();
@@ -95,8 +98,44 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   }, [contact]);
 
   useEffect(() => {
-    fetchContactData();
-  }, [fetchContactData]);
+    let ignore = false;
+    if (!contact) return;
+
+    const supabase = createClient();
+    Promise.all([
+      supabase
+        .from("deals")
+        .select("*, stage:pipeline_stages(*)")
+        .eq("contact_id", contact.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("contact_notes")
+        .select("*")
+        .eq("contact_id", contact.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("contact_tags")
+        .select("id, tag_id, tags(*)")
+        .eq("contact_id", contact.id),
+    ]).then(([dealsRes, notesRes, tagsRes]) => {
+      if (ignore) return;
+      if (dealsRes.data) setDeals(dealsRes.data);
+      if (notesRes.data) setNotes(notesRes.data);
+      if (tagsRes.data) {
+        const mapped = tagsRes.data
+          .filter((ct: Record<string, unknown>) => ct.tags)
+          .map((ct: Record<string, unknown>) => ({
+            ...(ct.tags as Tag),
+            contact_tag_id: ct.id as string,
+          }));
+        setTags(mapped);
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [contact]);
 
   const handleAddTag = useCallback(
     async (tagId: string) => {
@@ -109,7 +148,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
         });
         if (res.ok) {
           toast.success("Tag added to contact");
-          fetchContactData();
+          refreshContactData();
           setTagPopoverOpen(false);
         } else {
           const err = await res.json().catch(() => ({}));
@@ -119,7 +158,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
         toast.error("Network error adding tag");
       }
     },
-    [contact, fetchContactData]
+    [contact, refreshContactData]
   );
 
   const handleRemoveTag = useCallback(

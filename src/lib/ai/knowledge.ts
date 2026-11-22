@@ -102,14 +102,12 @@ export async function retrieveKnowledge(
   if (!query || k <= 0) return []
 
   // Check how many chunks this account has
-  let totalChunks = 0
   try {
     const { count, error } = await db
       .from('ai_knowledge_chunks')
       .select('id', { count: 'exact', head: true })
       .eq('account_id', accountId)
     if (error || !count) return []
-    totalChunks = count
   } catch {
     return []
   }
@@ -193,9 +191,13 @@ export async function retrieveKnowledge(
           .select('id, content')
           .eq('account_id', accountId)
 
-        const { data: fallbackChunks } = typeof (queryBuilder as any).limit === 'function'
-          ? await (queryBuilder as any).limit(k - picked.size)
-          : await queryBuilder
+        interface QueryWithOptionalLimit {
+          limit?: (count: number) => Promise<{ data: MatchRow[] | null }>
+        }
+        const builder = queryBuilder as unknown as QueryWithOptionalLimit
+        const { data: fallbackChunks } = typeof builder.limit === 'function'
+          ? await builder.limit(k - picked.size)
+          : await (queryBuilder as unknown as Promise<{ data: MatchRow[] | null }>)
 
         if (Array.isArray(fallbackChunks)) {
           for (const row of fallbackChunks as MatchRow[]) {

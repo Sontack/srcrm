@@ -1400,12 +1400,15 @@ export function N8nWorkspace() {
             <div className="space-y-3 py-2">
               <div className="text-xs font-semibold text-foreground">Included Nodes:</div>
               <div className="border border-border rounded p-3 bg-muted/40 divide-y divide-border/60 text-xs font-mono">
-                {previewTemplate.workflow.nodes.map((n: any, idx: number) => (
-                  <div key={idx} className="py-1.5 flex items-center justify-between">
-                    <span className="font-medium text-foreground">{n.name}</span>
-                    <span className="text-muted-foreground">{n.type}</span>
-                  </div>
-                ))}
+                {previewTemplate.workflow.nodes.map((item: unknown, idx: number) => {
+                  const n = (item && typeof item === 'object' ? item : {}) as { name?: string; type?: string };
+                  return (
+                    <div key={idx} className="py-1.5 flex items-center justify-between">
+                      <span className="font-medium text-foreground">{n.name}</span>
+                      <span className="text-muted-foreground">{n.type}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

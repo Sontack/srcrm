@@ -392,11 +392,14 @@ export default function ContactsPage() {
 
         const { data, error } = await query;
         if (error) throw error;
-        exportRows = (data || []).map((c: any) => ({
+        interface ContactExportRow extends Contact {
+          contact_tags?: Array<{ tag_id: string }>;
+        }
+        exportRows = ((data || []) as ContactExportRow[]).map((c) => ({
           ...c,
           tags: (c.contact_tags || [])
-            .map((ct: any) => tagsMap[ct.tag_id]?.name)
-            .filter(Boolean)
+            .map((ct) => tagsMap[ct.tag_id]?.name)
+            .filter((name): name is string => Boolean(name))
             .join(', '),
         }));
       }
@@ -412,7 +415,7 @@ export default function ContactsPage() {
         Email: c.email || '',
         Company: c.company || '',
         Tags: Array.isArray(c.tags)
-          ? c.tags.map((t: any) => t.name || t).join(', ')
+          ? c.tags.map((t) => (typeof t === 'string' ? t : t.name)).join(', ')
           : (c.tags || ''),
         'Created At': c.created_at ? new Date(c.created_at).toISOString() : '',
       }));

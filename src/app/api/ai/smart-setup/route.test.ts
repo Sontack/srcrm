@@ -13,7 +13,7 @@ vi.mock('@/lib/auth/account', () => ({
     userId: 'user-1',
     role: 'admin',
     supabase: {
-      from: (table: string) => ({
+      from: (_table: string) => ({
         select: () => ({
           eq: () => ({
             maybeSingle: async () => ({ data: h.stored, error: null }),

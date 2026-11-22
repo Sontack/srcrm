@@ -170,7 +170,7 @@ export function pruneConversationContext(
   if (!messages || messages.length === 0) return [];
 
   // Take the most recent turns
-  let slice = messages.slice(-maxTurns);
+  const slice = messages.slice(-maxTurns);
 
   // Calculate total characters
   let totalChars = slice.reduce((acc, m) => acc + m.content.length, 0);

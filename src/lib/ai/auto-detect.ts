@@ -528,10 +528,10 @@ export async function autoDetectAiCredentials(params: {
   const cached = getCachedDetection(cacheKey);
   if (cached) return cached;
 
-  let detected = detectProviderFromKey(apiKey, baseUrl);
+  const detected = detectProviderFromKey(apiKey, baseUrl);
 
   try {
-    let fetchResult = await fetchAvailableModels(
+    const fetchResult = await fetchAvailableModels(
       detected.provider,
       apiKey,
       detected.baseUrl
