@@ -12,13 +12,15 @@ import {
   Zap,
   Sliders,
   Bot,
-  Building2,
   ShieldCheck,
   Send,
   MessageSquare,
   RefreshCw,
-  AlertCircle,
-  HelpCircle,
+  Plus,
+  Key,
+  Star,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
@@ -43,7 +45,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { SettingsPanelHead } from './settings-panel-head';
 import { AiKnowledgeCard } from './ai-knowledge';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import type { AiProvider } from '@/lib/ai/types';
@@ -51,41 +52,17 @@ import type { AccountMember } from '@/types';
 import { fetchAccountMembers, memberLabel } from '@/lib/account/members';
 import { useTranslations } from 'next-intl';
 import { invalidateAiAccountStatus } from '@/lib/ai/account-status-cache';
+import type { AiKeyItem } from '@/lib/ai/key-manager';
 
 const MASKED_KEY = '••••••••••••••••';
 const HANDOFF_QUEUE = '__queue__';
-
-const PROVIDER_LABEL: Record<Exclude<AiProvider, 'openai_compatible'>, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic (Claude)',
-};
-
-const KEY_PLACEHOLDER: Record<AiProvider, string> = {
-  openai: 'sk-proj-... or sk-...',
-  anthropic: 'sk-ant-...',
-  openai_compatible: 'your-api-key',
-};
-
-const INDUSTRY_OPTIONS = [
-  'E-Commerce & Retail',
-  'Healthcare & Clinic',
-  'Real Estate & Property',
-  'Travel, Hospitality & Tourism',
-  'Consulting & Professional Services',
-  'Education & Training',
-  'Financial Services & Insurance',
-  'Restaurant & Food Delivery',
-  'Automotive & Transport',
-  'IT & Software Agency',
-  'Other Business',
-];
 
 export function AiConfig() {
   const { accountId, accountRole, profileLoading } = useAuth();
   const canEdit = accountRole ? canEditSettings(accountRole) : false;
   const t = useTranslations('Settings.aiConfig');
 
-  // Main UI Mode: 'smart' (1-click auto-setup) vs 'advanced' (manual controls)
+  // Main UI Mode: 'smart' (AI Keys & Automation) vs 'advanced' (System Prompt & Manual)
   const [setupMode, setSetupMode] = useState<'smart' | 'advanced'>('smart');
 
   const [loading, setLoading] = useState(true);
@@ -95,12 +72,15 @@ export function AiConfig() {
 
   // Config State
   const [configured, setConfigured] = useState(false);
-  const [provider, setProvider] = useState<AiProvider>('openai');
-  const [model, setModel] = useState(AI_PROVIDER_DEFAULT_MODEL.openai);
-  const [baseUrl, setBaseUrl] = useState('');
+  const [provider, setProvider] = useState<AiProvider>('openai_compatible');
+  const [model, setModel] = useState('models/gemini-2.5-flash-lite');
+  const [baseUrl, setBaseUrl] = useState('https://generativelanguage.googleapis.com/v1beta/openai');
   const [apiKey, setApiKey] = useState('');
   const [keyEdited, setKeyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [revealedPrimaryPlain, setRevealedPrimaryPlain] = useState<string | null>(null);
+  const [revealingPrimary, setRevealingPrimary] = useState(false);
+
   const [hasStoredKey, setHasStoredKey] = useState(false);
   const [embeddingsKey, setEmbeddingsKey] = useState('');
   const [embeddingsKeyEdited, setEmbeddingsKeyEdited] = useState(false);
@@ -112,14 +92,23 @@ export function AiConfig() {
   const [handoffAgentId, setHandoffAgentId] = useState('');
   const [members, setMembers] = useState<AccountMember[]>([]);
 
-  // Smart Setup Form State
-  const [businessName, setBusinessName] = useState('');
-  const [industry, setIndustry] = useState('E-Commerce & Retail');
-  const [businessHours, setBusinessHours] = useState('Mon - Sat: 9:00 AM - 8:00 PM');
-  const [contactInfo, setContactInfo] = useState('');
-  const [servicesAndPricing, setServicesAndPricing] = useState('');
-  const [policies, setPolicies] = useState('');
-  const [faqs, setFaqs] = useState('');
+  // Multiple API Keys State
+  const [aiKeys, setAiKeys] = useState<AiKeyItem[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState(false);
+  const [revealedKeys, setRevealedKeys] = useState<Record<string, string>>({});
+  const [revealingKeyId, setRevealingKeyId] = useState<string | null>(null);
+  const [testingKeyId, setTestingKeyId] = useState<string | null>(null);
+
+  // Add / Edit Key Form State
+  const [showAddKeyForm, setShowAddKeyForm] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState('');
+  const [newKeyProvider, setNewKeyProvider] = useState<AiProvider>('openai_compatible');
+  const [newKeyModel, setNewKeyModel] = useState('');
+  const [newKeyBaseUrl, setNewKeyBaseUrl] = useState('');
+  const [newKeyApiKey, setNewKeyApiKey] = useState('');
+  const [newKeyShowPlain, setNewKeyShowPlain] = useState(false);
+  const [newKeyIsPrimary, setNewKeyIsPrimary] = useState(false);
+  const [savingNewKey, setSavingNewKey] = useState(false);
 
   // Auto-Detection State
   const [detecting, setDetecting] = useState(false);
@@ -138,56 +127,77 @@ export function AiConfig() {
 
   const loadedAccountIdRef = useRef<string | null>(null);
 
-  // Trigger Provider & Model Auto-Detection
-  const runAutoDetect = useCallback(async (explicitKey?: string, explicitBaseUrl?: string) => {
-    const keyToDetect = explicitKey !== undefined ? explicitKey : (keyEdited ? apiKey.trim() : '');
-    const urlToDetect = explicitBaseUrl !== undefined ? explicitBaseUrl : baseUrl.trim();
-    
-    setDetecting(true);
+  // Fetch Multiple Keys List
+  const fetchKeys = useCallback(async () => {
+    setLoadingKeys(true);
     try {
-      const res = await fetch('/api/ai/detect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: keyToDetect || undefined,
-          baseUrl: urlToDetect || undefined,
-        }),
-      });
+      const res = await fetch('/api/ai/keys');
       const data = await res.json();
-      if (res.ok && data.ok) {
-        setProvider(data.provider);
-        setDetectedProviderName(data.providerName);
-        if (data.model) {
-          setModel(data.model);
-        }
-        if (Array.isArray(data.availableModels)) {
-          setAvailableModels(data.availableModels);
-        }
-        if (Array.isArray(data.modelsList)) {
-          setModelsList(data.modelsList);
-        }
-        if (data.baseUrl) {
-          setBaseUrl(data.baseUrl);
-        }
-        setDetectionSuccess(true);
-        if (explicitKey !== undefined || !keyEdited) {
-          toast.success(`Connected to ${data.providerName}! Selected model: ${data.model}`);
-        }
-      } else {
-        setDetectionSuccess(false);
-        if (explicitKey !== undefined) {
-          toast.error(data.error ?? 'Could not detect AI provider');
-        }
+      if (res.ok && Array.isArray(data.keys)) {
+        setAiKeys(data.keys);
       }
     } catch {
-      setDetectionSuccess(false);
-      if (explicitKey !== undefined) {
-        toast.error('Network error during AI detection');
-      }
+      // ignore
     } finally {
-      setDetecting(false);
+      setLoadingKeys(false);
     }
-  }, [apiKey, keyEdited, baseUrl]);
+  }, []);
+
+  // Trigger Provider & Model Auto-Detection
+  const runAutoDetect = useCallback(
+    async (explicitKey?: string, explicitBaseUrl?: string) => {
+      const keyToDetect =
+        explicitKey !== undefined ? explicitKey : keyEdited ? apiKey.trim() : '';
+      const urlToDetect =
+        explicitBaseUrl !== undefined ? explicitBaseUrl : baseUrl.trim();
+
+      setDetecting(true);
+      try {
+        const res = await fetch('/api/ai/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: keyToDetect || undefined,
+            baseUrl: urlToDetect || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          setProvider(data.provider);
+          setDetectedProviderName(data.providerName);
+          if (data.model) {
+            setModel(data.model);
+          }
+          if (Array.isArray(data.availableModels)) {
+            setAvailableModels(data.availableModels);
+          }
+          if (Array.isArray(data.modelsList)) {
+            setModelsList(data.modelsList);
+          }
+          if (data.baseUrl) {
+            setBaseUrl(data.baseUrl);
+          }
+          setDetectionSuccess(true);
+          if (explicitKey !== undefined || !keyEdited) {
+            toast.success(`Connected to ${data.providerName}! Selected model: ${data.model}`);
+          }
+        } else {
+          setDetectionSuccess(false);
+          if (explicitKey !== undefined) {
+            toast.error(data.error ?? 'Could not detect AI provider');
+          }
+        }
+      } catch {
+        setDetectionSuccess(false);
+        if (explicitKey !== undefined) {
+          toast.error('Network error during AI detection');
+        }
+      } finally {
+        setDetecting(false);
+      }
+    },
+    [apiKey, keyEdited, baseUrl]
+  );
 
   // Fetch Existing Config
   const fetchConfig = useCallback(async () => {
@@ -253,8 +263,9 @@ export function AiConfig() {
     if (!accountId || loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
     void fetchConfig();
+    void fetchKeys();
     void fetchAccountMembers().then(setMembers);
-  }, [accountId, fetchConfig]);
+  }, [accountId, fetchConfig, fetchKeys]);
 
   // Live Auto-Detection Debounce
   useEffect(() => {
@@ -268,23 +279,213 @@ export function AiConfig() {
     return () => clearTimeout(timer);
   }, [apiKey, keyEdited, baseUrl, runAutoDetect]);
 
-  const handleProviderChange = (next: AiProvider) => {
-    setProvider(next);
-    const isDefaultModel =
-      model === AI_PROVIDER_DEFAULT_MODEL.openai ||
-      model === AI_PROVIDER_DEFAULT_MODEL.anthropic ||
-      model === AI_PROVIDER_DEFAULT_MODEL.openai_compatible ||
-      model.trim() === '';
-    if (isDefaultModel) {
-      setModel(next === 'openai_compatible' ? '' : AI_PROVIDER_DEFAULT_MODEL[next]);
-    }
-  };
-
   const keyPayload = () => (keyEdited ? apiKey.trim() : undefined);
   const embeddingsKeyPayload = () =>
     embeddingsKeyEdited ? embeddingsKey.trim() || null : undefined;
 
-  // Test Connection
+  // Toggle Eye Show/Hide for Primary Key (fetches decrypted key securely if stored)
+  const handleToggleShowPrimaryKey = async () => {
+    if (showKey) {
+      setShowKey(false);
+      return;
+    }
+
+    if (keyEdited) {
+      setShowKey(true);
+      return;
+    }
+
+    if (!hasStoredKey) {
+      setShowKey(true);
+      return;
+    }
+
+    // Key is stored in database — reveal via authenticated admin endpoint
+    if (revealedPrimaryPlain) {
+      setApiKey(revealedPrimaryPlain);
+      setShowKey(true);
+      return;
+    }
+
+    setRevealingPrimary(true);
+    try {
+      const primaryKeyObj = aiKeys.find((k) => k.isPrimary);
+      const targetId = primaryKeyObj ? primaryKeyObj.id : 'primary-config-key';
+      const res = await fetch(`/api/ai/keys/${targetId}/reveal`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.apiKey) {
+        setRevealedPrimaryPlain(data.apiKey);
+        setApiKey(data.apiKey);
+        setShowKey(true);
+        toast.success('API Key verified & visible');
+      } else {
+        toast.error(data.error ?? 'Failed to reveal stored key');
+      }
+    } catch {
+      toast.error('Network error verifying API key');
+    } finally {
+      setRevealingPrimary(false);
+    }
+  };
+
+  // Toggle Eye Show/Hide for Any Saved Key Item
+  const handleToggleRevealKey = async (keyItem: AiKeyItem) => {
+    if (revealedKeys[keyItem.id]) {
+      setRevealedKeys((prev) => {
+        const next = { ...prev };
+        delete next[keyItem.id];
+        return next;
+      });
+      return;
+    }
+
+    setRevealingKeyId(keyItem.id);
+    try {
+      const res = await fetch(`/api/ai/keys/${keyItem.id}/reveal`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.apiKey) {
+        setRevealedKeys((prev) => ({ ...prev, [keyItem.id]: data.apiKey }));
+        toast.success(`Key "${keyItem.label}" revealed`);
+      } else {
+        toast.error(data.error ?? 'Failed to reveal API key');
+      }
+    } catch {
+      toast.error('Network error revealing API key');
+    } finally {
+      setRevealingKeyId(null);
+    }
+  };
+
+  // Test Connection for Any Saved Key
+  const handleTestKeyItem = async (keyItem: AiKeyItem) => {
+    setTestingKeyId(keyItem.id);
+    try {
+      const res = await fetch(`/api/ai/keys/${keyItem.id}/test`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Verified: ${data.message || 'Key connected successfully!'}`);
+        await fetchKeys();
+      } else {
+        toast.error(data.error ?? 'Connection test failed');
+      }
+    } catch {
+      toast.error('Network error during connection test');
+    } finally {
+      setTestingKeyId(null);
+    }
+  };
+
+  // Set Key as Primary
+  const handleSetPrimaryKey = async (keyItem: AiKeyItem) => {
+    try {
+      const res = await fetch(`/api/ai/keys/${keyItem.id}/primary`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`"${keyItem.label}" is now your Primary API Key`);
+        invalidateAiAccountStatus();
+        await fetchKeys();
+        await fetchConfig();
+      } else {
+        toast.error(data.error ?? 'Failed to set primary key');
+      }
+    } catch {
+      toast.error('Network error setting primary key');
+    }
+  };
+
+  // Toggle Key Enabled / Disabled
+  const handleToggleKeyActive = async (keyItem: AiKeyItem, isActiveVal: boolean) => {
+    try {
+      const res = await fetch(`/api/ai/keys/${keyItem.id}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: isActiveVal }),
+      });
+      if (res.ok) {
+        toast.success(`Key "${keyItem.label}" ${isActiveVal ? 'Enabled' : 'Disabled'}`);
+        await fetchKeys();
+      } else {
+        toast.error('Failed to update key status');
+      }
+    } catch {
+      toast.error('Network error updating key');
+    }
+  };
+
+  // Delete Key
+  const handleDeleteKey = async (keyItem: AiKeyItem) => {
+    if (!confirm(`Are you sure you want to delete "${keyItem.label}"?`)) return;
+
+    try {
+      const res = await fetch(`/api/ai/keys/${keyItem.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        toast.success(`Key "${keyItem.label}" deleted`);
+        invalidateAiAccountStatus();
+        await fetchKeys();
+        await fetchConfig();
+      } else {
+        const data = await res.json();
+        toast.error(data.error ?? 'Failed to delete key');
+      }
+    } catch {
+      toast.error('Network error deleting key');
+    }
+  };
+
+  // Add / Save New Key
+  const handleSaveNewKey = async () => {
+    if (!newKeyApiKey.trim()) {
+      toast.error('Please enter the API key');
+      return;
+    }
+    if (!newKeyModel.trim()) {
+      toast.error('Please select or specify a model');
+      return;
+    }
+    if (newKeyProvider === 'openai_compatible' && !newKeyBaseUrl.trim()) {
+      toast.error('Base URL is required for OpenAI-compatible providers');
+      return;
+    }
+
+    setSavingNewKey(true);
+    try {
+      const res = await fetch('/api/ai/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: newKeyLabel.trim() || undefined,
+          provider: newKeyProvider,
+          model: newKeyModel.trim(),
+          base_url: newKeyProvider === 'openai_compatible' ? newKeyBaseUrl.trim() : null,
+          api_key: newKeyApiKey.trim(),
+          is_primary: newKeyIsPrimary,
+          is_active: true,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        toast.success(`API Key "${data.key.label}" verified and saved successfully!`);
+        setShowAddKeyForm(false);
+        setNewKeyApiKey('');
+        setNewKeyLabel('');
+        setNewKeyModel('');
+        setNewKeyBaseUrl('');
+        setNewKeyIsPrimary(false);
+        invalidateAiAccountStatus();
+        await fetchKeys();
+        await fetchConfig();
+      } else {
+        toast.error(data.error ?? 'Failed to save API key. Please check the key and provider.');
+      }
+    } catch {
+      toast.error('Network error saving API key');
+    } finally {
+      setSavingNewKey(false);
+    }
+  };
+
+  // Test Connection for Main Key
   const handleTest = async () => {
     setTesting(true);
     try {
@@ -311,60 +512,6 @@ export function AiConfig() {
       setDetectionSuccess(false);
     } finally {
       setTesting(false);
-    }
-  };
-
-  // Smart 1-Click Auto-Configuration & Knowledge Ingestion
-  const handleSmartSetup = async () => {
-    if (!configured && !keyEdited && !hasStoredKey) {
-      toast.error('Please enter your AI API key');
-      return;
-    }
-    if (!businessName.trim() && !configured) {
-      toast.error('Please enter your Business / Company Name');
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const res = await fetch('/api/ai/smart-setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: keyPayload(),
-          provider,
-          model: model.trim() || undefined,
-          baseUrl: provider === 'openai_compatible' ? baseUrl.trim() : undefined,
-          businessInfo: {
-            businessName: businessName.trim() || 'Our Business',
-            industry,
-            businessHours: businessHours.trim() || undefined,
-            contactInfo: contactInfo.trim() || undefined,
-            servicesAndPricing: servicesAndPricing.trim() || undefined,
-            policies: policies.trim() || undefined,
-            faqs: faqs.trim() || undefined,
-          },
-          autoReplyEnabled,
-          maxPerConversation,
-          handoffAgentId: handoffAgentId || null,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.ok) {
-        invalidateAiAccountStatus();
-        toast.success('Smart AI Agent configured and activated successfully!');
-        if (data.knowledgeDocsCreated > 0) {
-          toast.info(`Created ${data.knowledgeDocsCreated} Knowledge Base sections for your business`);
-        }
-        await fetchConfig();
-      } else {
-        toast.error(data.error ?? 'Failed to complete Smart Setup');
-      }
-    } catch {
-      toast.error('Network error during Smart Setup');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -404,8 +551,9 @@ export function AiConfig() {
       const data = await res.json();
       if (res.ok) {
         invalidateAiAccountStatus();
-        toast.success(t('saveSuccess'));
+        toast.success('AI configuration and Primary Key saved securely!');
         await fetchConfig();
+        await fetchKeys();
       } else {
         toast.error(data.error ?? t('saveFailed'));
       }
@@ -475,7 +623,11 @@ export function AiConfig() {
 
   // Remove Config
   const handleRemove = async () => {
-    if (!confirm('Are you sure you want to remove the AI configuration? This will disable AI auto-replies.')) {
+    if (
+      !confirm(
+        'Are you sure you want to remove the AI configuration? This will disable AI auto-replies.'
+      )
+    ) {
       return;
     }
     setRemoving(true);
@@ -497,6 +649,7 @@ export function AiConfig() {
         setSystemPrompt('');
         setHandoffAgentId('');
         setDetectionSuccess(false);
+        await fetchKeys();
       } else {
         const data = await res.json();
         toast.error(data.error ?? t('removeFailed'));
@@ -530,12 +683,18 @@ export function AiConfig() {
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-bold tracking-tight">Smart AI Customer Support Assistant</h2>
               {configured && isActive ? (
-                <Badge variant="outline" className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 text-xs">
+                <Badge
+                  variant="outline"
+                  className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 text-xs"
+                >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
                   Active
                 </Badge>
               ) : configured ? (
-                <Badge variant="outline" className="bg-amber-500/10 border-amber-500/30 text-amber-400 text-xs">
+                <Badge
+                  variant="outline"
+                  className="bg-amber-500/10 border-amber-500/30 text-amber-400 text-xs"
+                >
                   Configured (Paused)
                 </Badge>
               ) : (
@@ -545,7 +704,7 @@ export function AiConfig() {
               )}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Automated 24/7 intelligent WhatsApp responses grounded in your business knowledge, pricing, and FAQs.
+              Automated 24/7 intelligent WhatsApp responses with multi-key failover and knowledge retrieval.
             </p>
           </div>
         </div>
@@ -559,7 +718,11 @@ export function AiConfig() {
               onCheckedChange={handleToggleAutoReply}
               disabled={disabled || !configured}
             />
-            <span className={`text-xs font-semibold ${autoReplyEnabled ? 'text-emerald-400' : 'text-muted-foreground'}`}>
+            <span
+              className={`text-xs font-semibold ${
+                autoReplyEnabled ? 'text-emerald-400' : 'text-muted-foreground'
+              }`}
+            >
               {autoReplyEnabled ? 'ON' : 'OFF'}
             </span>
           </div>
@@ -571,40 +734,51 @@ export function AiConfig() {
         <TabsList className="bg-card border border-border p-1">
           <TabsTrigger value="smart" className="gap-2">
             <Zap className="w-4 h-4 text-primary" />
-            Smart 1-Click Setup (Recommended)
+            AI Keys &amp; Automation
           </TabsTrigger>
           <TabsTrigger value="advanced" className="gap-2">
             <Sliders className="w-4 h-4" />
-            Advanced Settings
+            System Prompt &amp; Advanced
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB 1: SMART 1-CLICK SETUP */}
+        {/* TAB 1: AI KEYS & AUTOMATION */}
         <TabsContent value="smart" className="space-y-6 mt-4">
-          {/* Step 1: Automatic AI Key & Model Detection */}
+          {/* Card 1: Primary AI Key & Provider Auto-Detection */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-primary" />
-                  Step 1: AI Provider &amp; API Key
+                  Primary AI Provider &amp; API Key
                 </CardTitle>
                 {detectionSuccess && (
-                  <Badge variant="outline" className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 text-xs gap-1">
+                  <Badge
+                    variant="outline"
+                    className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 text-xs gap-1"
+                  >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Verified: {detectedProviderName || provider}
                   </Badge>
                 )}
               </div>
               <CardDescription className="text-xs">
-                Paste your OpenAI, Anthropic, Groq, or Gemini key. The system automatically detects your provider, validates the key, and selects the best model.
+                Enter your Primary API Key. The system validates the key, detects the provider, and secures it. Use the eye icon anytime to verify your saved key.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="smart-ai-key" className="text-xs font-semibold">
-                  API Key *
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="smart-ai-key" className="text-xs font-semibold">
+                    Primary API Key *
+                  </Label>
+                  {hasStoredKey && !keyEdited && (
+                    <span className="text-[11px] text-emerald-400 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Key saved in database
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <Input
@@ -616,22 +790,31 @@ export function AiConfig() {
                         setKeyEdited(true);
                       }}
                       onFocus={() => {
-                        if (!keyEdited && hasStoredKey) {
+                        if (!keyEdited && hasStoredKey && !showKey) {
                           setApiKey('');
                           setKeyEdited(true);
                         }
                       }}
-                      placeholder="sk-... (OpenAI) or sk-ant-... (Anthropic) or gsk_... (Groq)"
+                      placeholder="Paste your Gemini, OpenAI, or Anthropic API Key"
                       disabled={disabled}
                       autoComplete="off"
+                      className="pr-10 font-mono text-xs"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowKey((s) => !s)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      onClick={handleToggleShowPrimaryKey}
+                      disabled={revealingPrimary}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground focus:outline-none"
+                      title={showKey ? 'Hide API Key' : 'Show / Verify API Key'}
                       tabIndex={-1}
                     >
-                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      {revealingPrimary ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      ) : showKey ? (
+                        <EyeOff className="h-4 w-4 text-primary" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
 
@@ -659,23 +842,41 @@ export function AiConfig() {
                     ) : (
                       <CheckCircle2 className="mr-2 h-4 w-4" />
                     )}
-                    Test AI
+                    Test Key
+                  </Button>
+
+                  <Button
+                    onClick={handleManualSave}
+                    disabled={disabled || saving}
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : <Check className="h-4 w-4 mr-1.5" />}
+                    Save Key
                   </Button>
                 </div>
               </div>
 
-              {/* Detected Model & Provider Details Pill */}
+              {/* Detected Model & Provider Details */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-1">
-                  <div className="text-[11px] uppercase font-bold text-muted-foreground">Auto-Detected Provider</div>
+                  <div className="text-[11px] uppercase font-bold text-muted-foreground">
+                    Auto-Detected Provider
+                  </div>
                   <div className="text-sm font-semibold flex items-center gap-1.5 text-foreground">
                     <span className="w-2 h-2 rounded-full bg-primary" />
-                    {detectedProviderName || (provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'OpenAI-Compatible')}
+                    {detectedProviderName ||
+                      (provider === 'openai'
+                        ? 'OpenAI'
+                        : provider === 'anthropic'
+                        ? 'Anthropic'
+                        : 'OpenAI-Compatible')}
                   </div>
                 </div>
 
                 <div className="p-3 rounded-lg border border-border bg-muted/30 space-y-1">
-                  <div className="text-[11px] uppercase font-bold text-muted-foreground">Selected Model</div>
+                  <div className="text-[11px] uppercase font-bold text-muted-foreground">
+                    Selected Model
+                  </div>
                   {modelsList.length > 0 ? (
                     <select
                       className="bg-transparent border-0 text-sm font-semibold text-foreground focus:outline-none w-full cursor-pointer truncate"
@@ -684,7 +885,8 @@ export function AiConfig() {
                     >
                       {modelsList.map((m) => (
                         <option key={m.id} value={m.id} className="bg-popover text-popover-foreground">
-                          {m.name || m.id}{m.recommended ? ' ★ (Recommended)' : ''}
+                          {m.name || m.id}
+                          {m.recommended ? ' ★ (Recommended)' : ''}
                         </option>
                       ))}
                     </select>
@@ -710,135 +912,331 @@ export function AiConfig() {
             </CardContent>
           </Card>
 
-          {/* Step 2: Business Profile & Knowledge Ingestion */}
+          {/* Card 2: Multiple API Keys & Automatic Failover Management */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Building2 className="w-4 h-4 text-primary" />
-                Step 2: Business Profile &amp; Knowledge Base Ingestion
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Provide your business details, services, prices, and FAQs. Our AI engine automatically structures this into your Knowledge Base so answers are always 100% accurate.
-              </CardDescription>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Key className="w-4 h-4 text-primary" />
+                    Multiple API Keys &amp; Automatic Failover
+                  </CardTitle>
+                  <CardDescription className="text-xs mt-0.5">
+                    Save multiple API keys for the same AI provider. If your primary key reaches rate limits or quota, the AI automatically fails over to your backup keys with zero message loss.
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setShowAddKeyForm((v) => !v)}
+                  className="self-start sm:self-auto gap-1 text-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {showAddKeyForm ? 'Cancel' : 'Add Backup API Key'}
+                </Button>
+              </div>
             </CardHeader>
+
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-name" className="text-xs font-semibold">
-                    Business / Company Name *
-                  </Label>
-                  <Input
-                    id="biz-name"
-                    placeholder="e.g. Apex Travel Agency or Glow Dental Clinic"
-                    value={businessName}
-                    onChange={(e) => setBusinessName(e.target.value)}
-                    disabled={disabled}
-                  />
-                </div>
+              {/* Expandable Add New Key Form */}
+              {showAddKeyForm && (
+                <div className="p-4 rounded-xl border border-primary/30 bg-primary/5 space-y-4">
+                  <div className="font-semibold text-sm text-foreground flex items-center gap-2">
+                    <Plus className="w-4 h-4 text-primary" /> Add New API Key (Primary or Backup)
+                  </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-industry" className="text-xs font-semibold">
-                    Industry / Category
-                  </Label>
-                  <select
-                    id="biz-industry"
-                    className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={industry}
-                    onChange={(e) => setIndustry(e.target.value)}
-                    disabled={disabled}
-                  >
-                    {INDUSTRY_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Key Label *</Label>
+                      <Input
+                        placeholder="e.g. Gemini Backup 1, OpenAI Reserve"
+                        value={newKeyLabel}
+                        onChange={(e) => setNewKeyLabel(e.target.value)}
+                        className="text-xs"
+                      />
+                    </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-hours" className="text-xs font-semibold">
-                    Business Hours &amp; Working Days
-                  </Label>
-                  <Input
-                    id="biz-hours"
-                    placeholder="e.g. Mon-Sat: 9:00 AM - 8:00 PM IST (Closed Sundays)"
-                    value={businessHours}
-                    onChange={(e) => setBusinessHours(e.target.value)}
-                    disabled={disabled}
-                  />
-                </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Provider *</Label>
+                      <select
+                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm"
+                        value={newKeyProvider}
+                        onChange={(e) => setNewKeyProvider(e.target.value as AiProvider)}
+                      >
+                        <option value="openai_compatible">OpenAI-Compatible (Gemini, Groq, OpenRouter)</option>
+                        <option value="openai">OpenAI (ChatGPT)</option>
+                        <option value="anthropic">Anthropic (Claude)</option>
+                      </select>
+                    </div>
+                  </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-contact" className="text-xs font-semibold">
-                    Support Contact Details
-                  </Label>
-                  <Input
-                    id="biz-contact"
-                    placeholder="e.g. Phone: +91 9876543210, Email: support@apex.com, Location: Mumbai"
-                    value={contactInfo}
-                    onChange={(e) => setContactInfo(e.target.value)}
-                    disabled={disabled}
-                  />
-                </div>
-              </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">API Key *</Label>
+                    <div className="relative">
+                      <Input
+                        type={newKeyShowPlain ? 'text' : 'password'}
+                        placeholder="Paste API Key here"
+                        value={newKeyApiKey}
+                        onChange={(e) => setNewKeyApiKey(e.target.value)}
+                        className="pr-10 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setNewKeyShowPlain((v) => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {newKeyShowPlain ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="biz-services" className="text-xs font-semibold">
-                  Official Services &amp; Pricing Catalog (Verified Reference)
-                </Label>
-                <Textarea
-                  id="biz-services"
-                  placeholder="Enter services, products, and exact prices. Example:&#10;• Dubai 5-Day Holiday Package: ₹45,000 per person&#10;• Goa Weekend Getaway: ₹12,500 per couple&#10;• Visa Assistance: ₹3,500 per applicant"
-                  value={servicesAndPricing}
-                  onChange={(e) => setServicesAndPricing(e.target.value)}
-                  rows={4}
-                  disabled={disabled}
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  The AI will strictly quote these prices and will never invent or guess unlisted rates.
-                </p>
-              </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Model Name / ID *</Label>
+                      <Input
+                        placeholder="e.g. models/gemini-2.5-flash-lite or gpt-4o-mini"
+                        value={newKeyModel}
+                        onChange={(e) => setNewKeyModel(e.target.value)}
+                        className="text-xs"
+                      />
+                    </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-policies" className="text-xs font-semibold">
-                    Policies, Terms &amp; Refund Rules
-                  </Label>
-                  <Textarea
-                    id="biz-policies"
-                    placeholder="e.g. Cancellations made 48h prior receive a 90% refund. Rescheduling is complimentary up to 24h before."
-                    value={policies}
-                    onChange={(e) => setPolicies(e.target.value)}
-                    rows={3}
-                    disabled={disabled}
-                  />
-                </div>
+                    {newKeyProvider === 'openai_compatible' && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold">Base URL</Label>
+                        <Input
+                          placeholder="e.g. https://generativelanguage.googleapis.com/v1beta/openai"
+                          value={newKeyBaseUrl}
+                          onChange={(e) => setNewKeyBaseUrl(e.target.value)}
+                          className="text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="biz-faqs" className="text-xs font-semibold">
-                    Common Customer FAQs
-                  </Label>
-                  <Textarea
-                    id="biz-faqs"
-                    placeholder="e.g. Q: Do you provide EMI options? A: Yes, 0% EMI available on credit cards.&#10;Q: Can I book online? A: Yes via WhatsApp or website."
-                    value={faqs}
-                    onChange={(e) => setFaqs(e.target.value)}
-                    rows={3}
-                    disabled={disabled}
-                  />
+                  <div className="flex items-center justify-between pt-2">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={newKeyIsPrimary}
+                        onChange={(e) => setNewKeyIsPrimary(e.target.checked)}
+                        className="rounded border-input text-primary focus:ring-primary"
+                      />
+                      Make this the Primary API Key immediately
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowAddKeyForm(false)}
+                        disabled={savingNewKey}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveNewKey}
+                        disabled={savingNewKey || !newKeyApiKey.trim()}
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                      >
+                        {savingNewKey ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                            Verifying &amp; Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5 mr-1.5" />
+                            Validate &amp; Save Key
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Keys List */}
+              {loadingKeys ? (
+                <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading saved keys...
+                </div>
+              ) : aiKeys.length === 0 ? (
+                <div className="p-6 rounded-lg border border-dashed border-border text-center space-y-2">
+                  <Key className="w-6 h-6 text-muted-foreground mx-auto" />
+                  <p className="text-xs text-muted-foreground">
+                    Your Primary Key above is currently handling all requests. You can add backup keys anytime for automated failover.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {aiKeys.map((k, index) => {
+                    const isRevealed = Boolean(revealedKeys[k.id]);
+                    const isTestingThis = testingKeyId === k.id;
+                    const isRevealingThis = revealingKeyId === k.id;
+
+                    return (
+                      <div
+                        key={k.id}
+                        className={`p-3.5 rounded-xl border transition-all ${
+                          k.isPrimary
+                            ? 'border-primary/40 bg-primary/[0.03] shadow-sm'
+                            : 'border-border bg-card'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-sm text-foreground">
+                                {k.label || `API Key ${index + 1}`}
+                              </span>
+                              {k.isPrimary ? (
+                                <Badge className="bg-primary text-primary-foreground text-[10px] gap-1 px-1.5 py-0.5">
+                                  <Star className="w-3 h-3 fill-current" /> Primary
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] text-muted-foreground px-1.5 py-0.5">
+                                  Backup #{index}
+                                </Badge>
+                              )}
+
+                              {/* Status Badge */}
+                              {k.status === 'active' && (
+                                <Badge variant="outline" className="bg-emerald-500/10 border-emerald-500/30 text-emerald-400 text-[10px]">
+                                  Active
+                                </Badge>
+                              )}
+                              {k.status === 'backup' && (
+                                <Badge variant="outline" className="bg-blue-500/10 border-blue-500/30 text-blue-400 text-[10px]">
+                                  Standby / Failover Ready
+                                </Badge>
+                              )}
+                              {k.status === 'rate_limited' && (
+                                <Badge variant="outline" className="bg-amber-500/10 border-amber-500/30 text-amber-400 text-[10px] gap-1">
+                                  <AlertTriangle className="w-3 h-3" /> Rate Limited (Cooling Down)
+                                </Badge>
+                              )}
+                              {k.status === 'invalid' && (
+                                <Badge variant="outline" className="bg-rose-500/10 border-rose-500/30 text-rose-400 text-[10px]">
+                                  Invalid Key
+                                </Badge>
+                              )}
+                              {k.status === 'disabled' && (
+                                <Badge variant="outline" className="bg-muted text-muted-foreground text-[10px]">
+                                  Disabled
+                                </Badge>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground font-mono flex-wrap">
+                              <span className="text-foreground font-semibold">
+                                {isRevealed ? revealedKeys[k.id] : k.keyHint}
+                              </span>
+                              <span>•</span>
+                              <span>{k.provider}</span>
+                              <span>•</span>
+                              <span className="text-foreground">{k.model}</span>
+                            </div>
+
+                            {/* Request Stats */}
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-3 pt-0.5">
+                              <span>Total: {k.totalRequests} reqs</span>
+                              <span>Success: {k.successfulRequests}</span>
+                              {k.rateLimitErrors > 0 && (
+                                <span className="text-amber-400">Rate limits: {k.rateLimitErrors}</span>
+                              )}
+                              {k.lastUsedAt && (
+                                <span>Last used: {new Date(k.lastUsedAt).toLocaleTimeString()}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-1.5 self-end sm:self-center">
+                            {/* Eye Reveal Button */}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                              title={isRevealed ? 'Hide API Key' : 'Reveal API Key'}
+                              onClick={() => handleToggleRevealKey(k)}
+                              disabled={isRevealingThis}
+                            >
+                              {isRevealingThis ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                              ) : isRevealed ? (
+                                <EyeOff className="w-4 h-4 text-primary" />
+                              ) : (
+                                <Eye className="w-4 h-4" />
+                              )}
+                            </Button>
+
+                            {/* Test Connection */}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2 text-xs gap-1"
+                              onClick={() => handleTestKeyItem(k)}
+                              disabled={isTestingThis}
+                              title="Test API Key connection"
+                            >
+                              {isTestingThis ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              )}
+                              Test
+                            </Button>
+
+                            {/* Set Primary Button */}
+                            {!k.isPrimary && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                className="h-8 px-2 text-xs"
+                                onClick={() => handleSetPrimaryKey(k)}
+                                title="Promote to Primary Key"
+                              >
+                                Set Primary
+                              </Button>
+                            )}
+
+                            {/* Enable/Disable Switch */}
+                            <div className="flex items-center px-1" title={k.isActive ? 'Disable Key' : 'Enable Key'}>
+                              <Switch
+                                checked={k.isActive}
+                                onCheckedChange={(val) => handleToggleKeyActive(k, val)}
+                              />
+                            </div>
+
+                            {/* Delete Button */}
+                            {aiKeys.length > 1 && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10"
+                                onClick={() => handleDeleteKey(k)}
+                                title="Delete key"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Step 3: WhatsApp Automation & Live Simulator */}
+          {/* Card 3: WhatsApp Automation & Live Simulator */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                Step 3: WhatsApp Automation &amp; Safety Controls
+                WhatsApp Automation &amp; Safety Controls
               </CardTitle>
               <CardDescription className="text-xs">
                 Fine-tuned conversational safety and real-time response simulator.
@@ -849,12 +1247,12 @@ export function AiConfig() {
                 <div className="space-y-0.5">
                   <div className="text-xs font-semibold text-foreground">Automatic WhatsApp Reply</div>
                   <div className="text-[11px] text-muted-foreground">
-                    When active, incoming WhatsApp messages will receive instant, multilingual replies tailored to your business.
+                    When active, incoming WhatsApp messages will receive instant, multilingual replies tailored to your business rules.
                   </div>
                 </div>
                 <Switch
                   checked={autoReplyEnabled}
-                  onCheckedChange={setAutoReplyEnabled}
+                  onCheckedChange={handleToggleAutoReply}
                   disabled={disabled}
                 />
               </div>
@@ -900,179 +1298,12 @@ export function AiConfig() {
                   </div>
                 )}
               </div>
-
-              {/* Main Submit Button */}
-              <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div className="text-xs text-muted-foreground">
-                  Clicking Activate will test your key, encrypt your credentials, generate the smart prompt, and sync the Knowledge Base.
-                </div>
-                <Button
-                  onClick={handleSmartSetup}
-                  disabled={disabled}
-                  className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground font-semibold px-6"
-                >
-                  {saving ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Configuring AI Agent...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="mr-2 h-4 w-4" />
-                      Auto-Configure &amp; Activate AI Agent
-                    </>
-                  )}
-                </Button>
-              </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* TAB 2: ADVANCED CONFIGURATION (MANUAL CONTROLS) */}
+        {/* TAB 2: SYSTEM PROMPT & ADVANCED CONTROLS */}
         <TabsContent value="advanced" className="space-y-6 mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Sliders className="h-4 w-4 text-primary" /> {t('providerAndKey')}
-              </CardTitle>
-              <CardDescription>{t('encryptionNotice')}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>{t('provider')}</Label>
-                  <Select
-                    value={provider}
-                    onValueChange={(v) => handleProviderChange(v as AiProvider)}
-                    disabled={disabled}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
-                      <SelectItem value="anthropic">{PROVIDER_LABEL.anthropic}</SelectItem>
-                      <SelectItem value="openai_compatible">{t('providerOpenAiCompatible')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="ai-model-manual">{t('model')}</Label>
-                    {(modelsList.length > 0 || availableModels.length > 0) && (
-                      <span className="text-[11px] text-muted-foreground">
-                        {modelsList.length || availableModels.length} detected
-                      </span>
-                    )}
-                  </div>
-                  <Input
-                    id="ai-model-manual"
-                    list="ai-detected-models-datalist"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
-                    disabled={disabled}
-                  />
-                  <datalist id="ai-detected-models-datalist">
-                    {modelsList.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name || m.id} {m.recommended ? '(Recommended)' : ''}
-                      </option>
-                    ))}
-                    {modelsList.length === 0 &&
-                      availableModels.map((m) => (
-                        <option key={m} value={m} />
-                      ))}
-                  </datalist>
-                </div>
-
-                {provider === 'openai_compatible' && (
-                  <div className="space-y-2 sm:col-span-2">
-                    <Label htmlFor="ai-base-url-manual">{t('baseUrl')}</Label>
-                    <Input
-                      id="ai-base-url-manual"
-                      value={baseUrl}
-                      onChange={(e) => setBaseUrl(e.target.value)}
-                      placeholder="https://api.example.com/v1"
-                      disabled={disabled}
-                      autoComplete="off"
-                    />
-                    <p className="text-xs text-muted-foreground">{t('baseUrlHint')}</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="ai-key-manual">{t('apiKey')}</Label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Input
-                      id="ai-key-manual"
-                      type={showKey ? 'text' : 'password'}
-                      value={apiKey}
-                      onChange={(e) => {
-                        setApiKey(e.target.value);
-                        setKeyEdited(true);
-                      }}
-                      onFocus={() => {
-                        if (!keyEdited && hasStoredKey) {
-                          setApiKey('');
-                          setKeyEdited(true);
-                        }
-                      }}
-                      placeholder={KEY_PLACEHOLDER[provider]}
-                      disabled={disabled}
-                      autoComplete="off"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey((s) => !s)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      tabIndex={-1}
-                    >
-                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  <Button variant="outline" onClick={handleTest} disabled={disabled || testing}>
-                    {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                    {t('testKey')}
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="ai-embeddings-key-manual">
-                  {t('embeddingsKey')}{' '}
-                  <span className="font-normal text-muted-foreground">{t('optionalSemanticSearch')}</span>
-                </Label>
-                <Input
-                  id="ai-embeddings-key-manual"
-                  type="password"
-                  value={embeddingsKey}
-                  onChange={(e) => {
-                    setEmbeddingsKey(e.target.value);
-                    setEmbeddingsKeyEdited(true);
-                  }}
-                  onFocus={() => {
-                    if (!embeddingsKeyEdited && hasStoredEmbeddingsKey) {
-                      setEmbeddingsKey('');
-                      setEmbeddingsKeyEdited(true);
-                    }
-                  }}
-                  placeholder="sk-... (OpenAI)"
-                  disabled={disabled}
-                  autoComplete="off"
-                />
-                <p className="text-xs text-muted-foreground">
-                  {t('embeddingsHint', {
-                    sameKeyText: provider === 'openai' ? t('sameKeyText') : '',
-                  })}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t('behaviour')}</CardTitle>
@@ -1086,7 +1317,7 @@ export function AiConfig() {
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
                   placeholder={t('promptPlaceholder')}
-                  rows={6}
+                  rows={8}
                   disabled={disabled}
                 />
               </div>
@@ -1150,6 +1381,53 @@ export function AiConfig() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              {provider === 'openai_compatible' && (
+                <div className="space-y-2 pt-2 border-t border-border">
+                  <Label htmlFor="ai-base-url-manual">{t('baseUrl')}</Label>
+                  <Input
+                    id="ai-base-url-manual"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://generativelanguage.googleapis.com/v1beta/openai"
+                    disabled={disabled}
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">{t('baseUrlHint')}</p>
+                </div>
+              )}
+
+              <div className="space-y-2 pt-2 border-t border-border">
+                <Label htmlFor="ai-embeddings-key-manual">
+                  {t('embeddingsKey')}{' '}
+                  <span className="font-normal text-muted-foreground">
+                    {t('optionalSemanticSearch')}
+                  </span>
+                </Label>
+                <Input
+                  id="ai-embeddings-key-manual"
+                  type="password"
+                  value={embeddingsKey}
+                  onChange={(e) => {
+                    setEmbeddingsKey(e.target.value);
+                    setEmbeddingsKeyEdited(true);
+                  }}
+                  onFocus={() => {
+                    if (!embeddingsKeyEdited && hasStoredEmbeddingsKey) {
+                      setEmbeddingsKey('');
+                      setEmbeddingsKeyEdited(true);
+                    }
+                  }}
+                  placeholder="sk-... (OpenAI)"
+                  disabled={disabled}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('embeddingsHint', {
+                    sameKeyText: provider === 'openai' ? t('sameKeyText') : '',
+                  })}
+                </p>
               </div>
             </CardContent>
           </Card>

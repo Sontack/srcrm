@@ -9,6 +9,7 @@ import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { pruneConversationContext } from './token-optimizer'
 import type { GenerateResult } from './types'
+import { executeWithFailover } from './key-manager'
 import {
   engineSendText,
   loadAccountMetaCredentials,
@@ -181,29 +182,25 @@ export async function dispatchInboundToAiReply(
     let genError: unknown = null
 
     try {
-      generation = await generateReply({
-        config,
-        systemPrompt,
-        messages: prunedMessages,
-        maxTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.3,
-      })
-    } catch (firstErr) {
-      genError = firstErr
-      console.warn('[ai auto-reply] first generate attempt failed, retrying once:', firstErr)
-      try {
-        generation = await generateReply({
-          config,
+      generation = await executeWithFailover(db, accountId, async (activeKey) => {
+        const activeConfig = {
+          ...config,
+          provider: activeKey.provider,
+          model: activeKey.model,
+          baseUrl: activeKey.baseUrl,
+          apiKey: activeKey.apiKey,
+        }
+        return await generateReply({
+          config: activeConfig,
           systemPrompt,
           messages: prunedMessages,
           maxTokens: MAX_OUTPUT_TOKENS,
           temperature: 0.3,
         })
-        genError = null
-      } catch (retryErr) {
-        genError = retryErr
-        console.error('[ai auto-reply] retry generate attempt also failed:', retryErr)
-      }
+      }, config)
+    } catch (failoverErr) {
+      genError = failoverErr
+      console.error('[ai auto-reply] all failover attempts failed:', failoverErr)
     }
 
     if (!generation || genError) {

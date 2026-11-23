@@ -4,6 +4,7 @@ import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit
 import { loadAiConfig } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
+import { executeWithFailover } from '@/lib/ai/key-manager'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
@@ -87,7 +88,16 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, handoff } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff } = await executeWithFailover(supabase, accountId, async (activeKey) => {
+      const activeConfig = {
+        ...config,
+        provider: activeKey.provider,
+        model: activeKey.model,
+        baseUrl: activeKey.baseUrl,
+        apiKey: activeKey.apiKey,
+      }
+      return await generateReply({ config: activeConfig, systemPrompt, messages })
+    }, config)
     return NextResponse.json({ reply: text, handoff })
   } catch (err) {
     if (err instanceof AiError) {

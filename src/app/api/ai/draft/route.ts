@@ -5,6 +5,7 @@ import { loadAiConfig } from '@/lib/ai/config'
 import { buildConversationContext } from '@/lib/ai/context'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
+import { executeWithFailover } from '@/lib/ai/key-manager'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { logAiUsage } from '@/lib/ai/usage'
@@ -107,7 +108,16 @@ export async function POST(request: Request) {
       knowledge,
     })
 
-    const { text, usage } = await generateReply({ config, systemPrompt, messages })
+    const { text, usage } = await executeWithFailover(supabase, accountId, async (activeKey) => {
+      const activeConfig = {
+        ...config,
+        provider: activeKey.provider,
+        model: activeKey.model,
+        baseUrl: activeKey.baseUrl,
+        apiKey: activeKey.apiKey,
+      }
+      return await generateReply({ config: activeConfig, systemPrompt, messages })
+    }, config)
 
     // Record spend on the account's BYO key. Best-effort + via the
     // service role (the log has no `authenticated` INSERT policy). This
