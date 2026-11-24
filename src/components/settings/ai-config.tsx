@@ -21,6 +21,7 @@ import {
   Star,
   Check,
   AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
@@ -46,7 +47,6 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiKnowledgeCard } from './ai-knowledge';
-import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import type { AiProvider } from '@/lib/ai/types';
 import type { AccountMember } from '@/types';
 import { fetchAccountMembers, memberLabel } from '@/lib/account/members';
@@ -110,7 +110,18 @@ export function AiConfig() {
   const [newKeyIsPrimary, setNewKeyIsPrimary] = useState(false);
   const [savingNewKey, setSavingNewKey] = useState(false);
 
-  // Auto-Detection State
+  // Add Key Auto-Detection State
+  const [newKeyDetecting, setNewKeyDetecting] = useState(false);
+  const [newKeyDetectedProviderName, setNewKeyDetectedProviderName] = useState('');
+  const [newKeyDetectionSuccess, setNewKeyDetectionSuccess] = useState(false);
+  const [newKeyDetectionError, setNewKeyDetectionError] = useState<string | null>(null);
+  const [newKeyAvailableModels, setNewKeyAvailableModels] = useState<string[]>([]);
+  const [newKeyModelsList, setNewKeyModelsList] = useState<
+    { id: string; name: string; description?: string; recommended?: boolean }[]
+  >([]);
+  const [newKeyUserEditedLabel, setNewKeyUserEditedLabel] = useState(false);
+
+  // Primary Key Auto-Detection State
   const [detecting, setDetecting] = useState(false);
   const [detectedProviderName, setDetectedProviderName] = useState('');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -118,6 +129,7 @@ export function AiConfig() {
     { id: string; name: string; description?: string; recommended?: boolean }[]
   >([]);
   const [detectionSuccess, setDetectionSuccess] = useState(false);
+  const [primaryDetectionError, setPrimaryDetectionError] = useState<string | null>(null);
 
   // Live Simulator Test State
   const [simMessage, setSimMessage] = useState('Hi! What are your services and prices?');
@@ -143,7 +155,7 @@ export function AiConfig() {
     }
   }, []);
 
-  // Trigger Provider & Model Auto-Detection
+  // Trigger Primary Key Provider & Model Auto-Detection
   const runAutoDetect = useCallback(
     async (explicitKey?: string, explicitBaseUrl?: string) => {
       const keyToDetect =
@@ -152,6 +164,7 @@ export function AiConfig() {
         explicitBaseUrl !== undefined ? explicitBaseUrl : baseUrl.trim();
 
       setDetecting(true);
+      setPrimaryDetectionError(null);
       try {
         const res = await fetch('/api/ai/detect', {
           method: 'POST',
@@ -178,25 +191,103 @@ export function AiConfig() {
             setBaseUrl(data.baseUrl);
           }
           setDetectionSuccess(true);
+          setPrimaryDetectionError(null);
           if (explicitKey !== undefined || !keyEdited) {
             toast.success(`Connected to ${data.providerName}! Selected model: ${data.model}`);
           }
         } else {
           setDetectionSuccess(false);
+          const err = data.error ?? 'Could not detect or validate AI provider';
+          setPrimaryDetectionError(err);
           if (explicitKey !== undefined) {
-            toast.error(data.error ?? 'Could not detect AI provider');
+            toast.error(err);
           }
         }
       } catch {
         setDetectionSuccess(false);
+        const err = 'Network error during AI detection';
+        setPrimaryDetectionError(err);
         if (explicitKey !== undefined) {
-          toast.error('Network error during AI detection');
+          toast.error(err);
         }
       } finally {
         setDetecting(false);
       }
     },
     [apiKey, keyEdited, baseUrl]
+  );
+
+  // Auto-Detection for New Key in Multiple Keys Form
+  const runAutoDetectNewKey = useCallback(
+    async (rawKey: string, rawBaseUrl?: string) => {
+      const keyToDetect = rawKey.trim();
+      if (!keyToDetect || keyToDetect.length < 8) {
+        setNewKeyDetectionError(null);
+        setNewKeyDetectionSuccess(false);
+        return;
+      }
+
+      setNewKeyDetecting(true);
+      setNewKeyDetectionError(null);
+
+      try {
+        const res = await fetch('/api/ai/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: keyToDetect,
+            baseUrl: rawBaseUrl?.trim() || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          setNewKeyProvider(data.provider);
+          setNewKeyDetectedProviderName(data.providerName);
+          if (data.model) {
+            setNewKeyModel(data.model);
+          }
+          if (data.baseUrl) {
+            setNewKeyBaseUrl(data.baseUrl);
+          }
+          if (Array.isArray(data.availableModels)) {
+            setNewKeyAvailableModels(data.availableModels);
+          }
+          if (Array.isArray(data.modelsList)) {
+            setNewKeyModelsList(data.modelsList);
+          }
+          setNewKeyDetectionSuccess(true);
+          setNewKeyDetectionError(null);
+
+          // Auto-suggest label if user hasn't typed a custom one
+          setNewKeyLabel((prev) => {
+            if (prev && newKeyUserEditedLabel) return prev;
+            const existingCount = aiKeys.filter(
+              (k) =>
+                k.provider === data.provider ||
+                k.label?.toLowerCase().includes((data.providerName || '').toLowerCase())
+            ).length;
+            return newKeyIsPrimary
+              ? `${data.providerName} Primary`
+              : `${data.providerName} Backup ${existingCount + 1}`;
+          });
+
+          toast.success(`Connected to ${data.providerName}! Selected model: ${data.model}`);
+        } else {
+          setNewKeyDetectionSuccess(false);
+          const err = data.error || 'Failed to detect AI provider or validate API key';
+          setNewKeyDetectionError(err);
+          toast.error(err);
+        }
+      } catch {
+        setNewKeyDetectionSuccess(false);
+        const err = 'Network error connecting to AI provider detection endpoint';
+        setNewKeyDetectionError(err);
+        toast.error(err);
+      } finally {
+        setNewKeyDetecting(false);
+      }
+    },
+    [aiKeys, newKeyIsPrimary, newKeyUserEditedLabel]
   );
 
   // Fetch Existing Config
@@ -267,17 +358,34 @@ export function AiConfig() {
     void fetchAccountMembers().then(setMembers);
   }, [accountId, fetchConfig, fetchKeys]);
 
-  // Live Auto-Detection Debounce
+  // Live Auto-Detection Debounce for Primary Key
   useEffect(() => {
     if (!keyEdited || !apiKey.trim() || apiKey === MASKED_KEY) return;
     if (apiKey.trim().length < 8) return;
 
     const timer = setTimeout(() => {
       void runAutoDetect(apiKey.trim(), baseUrl.trim());
-    }, 600);
+    }, 400);
 
     return () => clearTimeout(timer);
   }, [apiKey, keyEdited, baseUrl, runAutoDetect]);
+
+  // Live Auto-Detection Debounce for New Key (Multiple Keys Form)
+  useEffect(() => {
+    if (!showAddKeyForm) return;
+    const key = newKeyApiKey.trim();
+    if (key.length < 8) {
+      if (newKeyDetectionError) setNewKeyDetectionError(null);
+      if (newKeyDetectionSuccess) setNewKeyDetectionSuccess(false);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void runAutoDetectNewKey(key, newKeyBaseUrl);
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [newKeyApiKey, showAddKeyForm, newKeyBaseUrl, runAutoDetectNewKey, newKeyDetectionError, newKeyDetectionSuccess]);
 
   const keyPayload = () => (keyEdited ? apiKey.trim() : undefined);
   const embeddingsKeyPayload = () =>
@@ -434,30 +542,66 @@ export function AiConfig() {
 
   // Add / Save New Key
   const handleSaveNewKey = async () => {
-    if (!newKeyApiKey.trim()) {
+    const rawKey = newKeyApiKey.trim();
+    if (!rawKey) {
       toast.error('Please enter the API key');
-      return;
-    }
-    if (!newKeyModel.trim()) {
-      toast.error('Please select or specify a model');
-      return;
-    }
-    if (newKeyProvider === 'openai_compatible' && !newKeyBaseUrl.trim()) {
-      toast.error('Base URL is required for OpenAI-compatible providers');
       return;
     }
 
     setSavingNewKey(true);
+    setNewKeyDetectionError(null);
+
+    let finalProvider = newKeyProvider;
+    let finalModel = newKeyModel.trim();
+    let finalBaseUrl = newKeyBaseUrl.trim() || null;
+
+    // If model is empty or detection hasn't completed, run auto-detection right now
+    if (!finalModel || !newKeyDetectionSuccess) {
+      try {
+        const detectRes = await fetch('/api/ai/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: rawKey,
+            baseUrl: finalBaseUrl || undefined,
+          }),
+        });
+        const detectData = await detectRes.json();
+        if (detectRes.ok && detectData.ok) {
+          finalProvider = detectData.provider;
+          finalModel = detectData.model;
+          finalBaseUrl = detectData.baseUrl || finalBaseUrl;
+          setNewKeyProvider(finalProvider);
+          setNewKeyModel(finalModel);
+          if (detectData.baseUrl) setNewKeyBaseUrl(detectData.baseUrl);
+          setNewKeyDetectionSuccess(true);
+          setNewKeyDetectionError(null);
+        } else {
+          const err = detectData.error || 'Failed to validate API key with provider';
+          setNewKeyDetectionError(err);
+          toast.error(err);
+          setSavingNewKey(false);
+          return;
+        }
+      } catch {
+        const err = 'Network error during API key validation';
+        setNewKeyDetectionError(err);
+        toast.error(err);
+        setSavingNewKey(false);
+        return;
+      }
+    }
+
     try {
       const res = await fetch('/api/ai/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           label: newKeyLabel.trim() || undefined,
-          provider: newKeyProvider,
-          model: newKeyModel.trim(),
-          base_url: newKeyProvider === 'openai_compatible' ? newKeyBaseUrl.trim() : null,
-          api_key: newKeyApiKey.trim(),
+          provider: finalProvider,
+          model: finalModel,
+          base_url: finalBaseUrl,
+          api_key: rawKey,
           is_primary: newKeyIsPrimary,
           is_active: true,
         }),
@@ -472,14 +616,24 @@ export function AiConfig() {
         setNewKeyModel('');
         setNewKeyBaseUrl('');
         setNewKeyIsPrimary(false);
+        setNewKeyDetectionSuccess(false);
+        setNewKeyDetectionError(null);
+        setNewKeyDetectedProviderName('');
+        setNewKeyModelsList([]);
+        setNewKeyAvailableModels([]);
+        setNewKeyUserEditedLabel(false);
         invalidateAiAccountStatus();
         await fetchKeys();
         await fetchConfig();
       } else {
-        toast.error(data.error ?? 'Failed to save API key. Please check the key and provider.');
+        const errMsg = data.error ?? 'Failed to save API key. Please check the key and provider.';
+        setNewKeyDetectionError(errMsg);
+        toast.error(errMsg);
       }
     } catch {
-      toast.error('Network error saving API key');
+      const errMsg = 'Network error saving API key';
+      setNewKeyDetectionError(errMsg);
+      toast.error(errMsg);
     } finally {
       setSavingNewKey(false);
     }
@@ -789,6 +943,14 @@ export function AiConfig() {
                         setApiKey(e.target.value);
                         setKeyEdited(true);
                       }}
+                      onPaste={(e) => {
+                        const pasted = e.clipboardData.getData('text').trim();
+                        if (pasted.length >= 8) {
+                          setApiKey(pasted);
+                          setKeyEdited(true);
+                          void runAutoDetect(pasted, baseUrl.trim());
+                        }
+                      }}
                       onFocus={() => {
                         if (!keyEdited && hasStoredKey && !showKey) {
                           setApiKey('');
@@ -854,6 +1016,24 @@ export function AiConfig() {
                     Save Key
                   </Button>
                 </div>
+
+                {/* Primary Key Detection Live Feedback */}
+                {detecting && (
+                  <div className="flex items-center gap-2 p-2 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary font-medium animate-pulse">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                    Auto-detecting provider &amp; retrieving live models from API...
+                  </div>
+                )}
+
+                {primaryDetectionError && (
+                  <div className="flex items-start gap-2.5 p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-xs text-destructive font-medium">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <div className="font-semibold">Detection &amp; Validation Failed</div>
+                      <div className="text-destructive/90">{primaryDetectionError}</div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Detected Model & Provider Details */}
@@ -937,80 +1117,187 @@ export function AiConfig() {
             </CardHeader>
 
             <CardContent className="space-y-4">
-              {/* Expandable Add New Key Form */}
+              {/* Expandable Add New Key Form with Universal Auto-Detection */}
               {showAddKeyForm && (
                 <div className="p-4 rounded-xl border border-primary/30 bg-primary/5 space-y-4">
-                  <div className="font-semibold text-sm text-foreground flex items-center gap-2">
-                    <Plus className="w-4 h-4 text-primary" /> Add New API Key (Primary or Backup)
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold">Key Label *</Label>
-                      <Input
-                        placeholder="e.g. Gemini Backup 1, OpenAI Reserve"
-                        value={newKeyLabel}
-                        onChange={(e) => setNewKeyLabel(e.target.value)}
-                        className="text-xs"
-                      />
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-sm text-foreground flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-primary" />
+                      Add API Key with Auto-Detection
                     </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold">Provider *</Label>
-                      <select
-                        className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm"
-                        value={newKeyProvider}
-                        onChange={(e) => setNewKeyProvider(e.target.value as AiProvider)}
+                    {newKeyDetectionSuccess && (
+                      <Badge
+                        variant="outline"
+                        className="bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs gap-1"
                       >
-                        <option value="openai_compatible">OpenAI-Compatible (Gemini, Groq, OpenRouter)</option>
-                        <option value="openai">OpenAI (ChatGPT)</option>
-                        <option value="anthropic">Anthropic (Claude)</option>
-                      </select>
-                    </div>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Verified: {newKeyDetectedProviderName || newKeyProvider}
+                      </Badge>
+                    )}
                   </div>
 
+                  <p className="text-xs text-muted-foreground">
+                    Paste any API key (Google Gemini, OpenAI, OpenRouter, NVIDIA NIM, Groq, Anthropic, etc.). The provider, recommended model, and endpoint will be automatically detected and validated immediately through the provider&apos;s API.
+                  </p>
+
+                  {/* Primary Field: API Key Input with Eye Toggle & Immediate Paste Detection */}
                   <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold">API Key *</Label>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-semibold">API Key *</Label>
+                      {newKeyApiKey.trim().length >= 8 && (
+                        <button
+                          type="button"
+                          onClick={() => void runAutoDetectNewKey(newKeyApiKey, newKeyBaseUrl)}
+                          disabled={newKeyDetecting}
+                          className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                        >
+                          {newKeyDetecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                          Re-detect
+                        </button>
+                      )}
+                    </div>
                     <div className="relative">
                       <Input
                         type={newKeyShowPlain ? 'text' : 'password'}
-                        placeholder="Paste API Key here"
+                        placeholder="Paste API Key here (e.g. AIzaSy..., sk-proj..., gsk_..., nvapi-...)"
                         value={newKeyApiKey}
                         onChange={(e) => setNewKeyApiKey(e.target.value)}
+                        onPaste={(e) => {
+                          const pasted = e.clipboardData.getData('text').trim();
+                          if (pasted.length >= 8) {
+                            setNewKeyApiKey(pasted);
+                            void runAutoDetectNewKey(pasted, newKeyBaseUrl);
+                          }
+                        }}
                         className="pr-10 font-mono text-xs"
+                        autoComplete="off"
                       />
                       <button
                         type="button"
                         onClick={() => setNewKeyShowPlain((v) => !v)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
+                        tabIndex={-1}
                       >
                         {newKeyShowPlain ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
+
+                    {/* Live Detection Feedback */}
+                    {newKeyDetecting && (
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary font-medium animate-pulse">
+                        <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                        Auto-detecting provider and fetching models from API...
+                      </div>
+                    )}
+
+                    {newKeyDetectionError && (
+                      <div className="flex items-start gap-2.5 p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-xs text-destructive font-medium">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <div className="font-semibold">Detection &amp; Validation Failed</div>
+                          <div className="text-destructive/90">{newKeyDetectionError}</div>
+                        </div>
+                      </div>
+                    )}
+
+                    {newKeyDetectionSuccess && (
+                      <div className="flex items-center justify-between p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          <span>
+                            Connected: <strong>{newKeyDetectedProviderName || newKeyProvider}</strong>
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="bg-emerald-500/20 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 text-[10px]">
+                          Key Validated
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Auto-Populated Configuration Details */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Auto-Detected Provider */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Auto-Detected Provider</Label>
+                      <div className="w-full h-9 rounded-md border border-input bg-background/50 px-3 py-1.5 text-xs shadow-sm flex items-center justify-between">
+                        <span className="font-medium text-foreground">
+                          {newKeyDetectedProviderName ||
+                            (newKeyProvider === 'openai'
+                              ? 'OpenAI (ChatGPT)'
+                              : newKeyProvider === 'anthropic'
+                              ? 'Anthropic (Claude)'
+                              : 'OpenAI-Compatible')}
+                        </span>
+                        <Badge variant="secondary" className="text-[10px]">Auto-Filled</Badge>
+                      </div>
+                    </div>
+
+                    {/* Auto-Populated Model Selection */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Model Name / ID *</Label>
+                      {newKeyModelsList.length > 0 ? (
+                        <select
+                          className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm font-medium"
+                          value={newKeyModel}
+                          onChange={(e) => setNewKeyModel(e.target.value)}
+                        >
+                          {newKeyModelsList.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name || m.id} {m.recommended ? '★ (Recommended)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : newKeyAvailableModels.length > 0 ? (
+                        <select
+                          className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm font-medium"
+                          value={newKeyModel}
+                          onChange={(e) => setNewKeyModel(e.target.value)}
+                        >
+                          {newKeyAvailableModels.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          placeholder="Auto-detected on key entry"
+                          value={newKeyModel}
+                          onChange={(e) => setNewKeyModel(e.target.value)}
+                          className="text-xs font-mono"
+                        />
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Auto-Suggested Key Label */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold">Model Name / ID *</Label>
+                      <Label className="text-xs font-semibold">Key Label</Label>
                       <Input
-                        placeholder="e.g. models/gemini-2.5-flash-lite or gpt-4o-mini"
-                        value={newKeyModel}
-                        onChange={(e) => setNewKeyModel(e.target.value)}
+                        placeholder="e.g. Gemini Backup 1, OpenAI Reserve"
+                        value={newKeyLabel}
+                        onChange={(e) => {
+                          setNewKeyLabel(e.target.value);
+                          setNewKeyUserEditedLabel(true);
+                        }}
                         className="text-xs"
                       />
                     </div>
 
-                    {newKeyProvider === 'openai_compatible' && (
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-semibold">Base URL</Label>
-                        <Input
-                          placeholder="e.g. https://generativelanguage.googleapis.com/v1beta/openai"
-                          value={newKeyBaseUrl}
-                          onChange={(e) => setNewKeyBaseUrl(e.target.value)}
-                          className="text-xs"
-                        />
-                      </div>
-                    )}
+                    {/* Auto-Filled Base URL */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">
+                        Base URL {newKeyProvider === 'openai_compatible' ? '(Auto-Filled)' : '(Optional)'}
+                      </Label>
+                      <Input
+                        placeholder="Auto-filled for provider (e.g. https://generativelanguage.googleapis.com/...)"
+                        value={newKeyBaseUrl}
+                        onChange={(e) => setNewKeyBaseUrl(e.target.value)}
+                        className="text-xs font-mono"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between pt-2">
@@ -1028,16 +1315,21 @@ export function AiConfig() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setShowAddKeyForm(false)}
+                        onClick={() => {
+                          setShowAddKeyForm(false);
+                          setNewKeyDetectionError(null);
+                          setNewKeyDetectionSuccess(false);
+                        }}
                         disabled={savingNewKey}
+                        className="text-xs"
                       >
                         Cancel
                       </Button>
                       <Button
                         size="sm"
                         onClick={handleSaveNewKey}
-                        disabled={savingNewKey || !newKeyApiKey.trim()}
-                        className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+                        disabled={savingNewKey || newKeyDetecting || !newKeyApiKey.trim()}
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs"
                       >
                         {savingNewKey ? (
                           <>
@@ -1047,7 +1339,7 @@ export function AiConfig() {
                         ) : (
                           <>
                             <Check className="w-3.5 h-3.5 mr-1.5" />
-                            Validate &amp; Save Key
+                            Save Key
                           </>
                         )}
                       </Button>

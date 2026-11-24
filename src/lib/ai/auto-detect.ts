@@ -277,9 +277,13 @@ export async function fetchAvailableModels(
             })),
           };
         }
+      } else {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.error?.message || `Google Gemini API rejected key with HTTP ${res.status}`;
+        throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
       }
-    } catch {
-      // Fall through to known Gemini defaults
+    } catch (err: unknown) {
+      if (err instanceof AiError) throw err;
     }
 
     return {
@@ -325,9 +329,13 @@ export async function fetchAvailableModels(
             })),
           };
         }
+      } else {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.error?.message || `NVIDIA NIM API rejected key with HTTP ${res.status}`;
+        throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
       }
-    } catch {
-      // Fall through
+    } catch (err: unknown) {
+      if (err instanceof AiError) throw err;
     }
 
     return {
@@ -377,9 +385,13 @@ export async function fetchAvailableModels(
             recommended: id === rec,
           })),
         };
+      } else {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.error?.message || `OpenRouter API rejected key with HTTP ${res.status}`;
+        throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
       }
-    } catch {
-      // Fall through
+    } catch (err: unknown) {
+      if (err instanceof AiError) throw err;
     }
 
     return {
@@ -428,9 +440,13 @@ export async function fetchAvailableModels(
             })),
           };
         }
+      } else {
+        const errJson = await res.json().catch(() => null);
+        const errMsg = errJson?.error?.message || `Groq API rejected key with HTTP ${res.status}`;
+        throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
       }
-    } catch {
-      // Fall through
+    } catch (err: unknown) {
+      if (err instanceof AiError) throw err;
     }
 
     return {
@@ -489,8 +505,13 @@ export async function fetchAvailableModels(
           })),
         };
       }
+    } else {
+      const errJson = await res.json().catch(() => null);
+      const errMsg = errJson?.error?.message || `Endpoint rejected request with HTTP ${res.status}`;
+      throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (err instanceof AiError) throw err;
     console.warn('[auto-detect] Failed to fetch models from OpenAI-compatible endpoint:', err);
   }
 
@@ -595,7 +616,7 @@ export async function autoDetectAiCredentials(params: {
       ok: false,
       provider: detected.provider,
       providerName: detected.providerName,
-      model: AI_PROVIDER_DEFAULT_MODEL[detected.provider] || 'gpt-4o-mini',
+      model: '',
       availableModels: [],
       modelsList: [],
       baseUrl: detected.baseUrl,

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import type { AiConfig, AiProvider } from './types'
 import { validateAiCredentials } from './validate'
+import { detectProviderFromKey } from './auto-detect'
 import {
   maskApiKey,
   isRateLimitOrQuotaError,
@@ -209,12 +210,20 @@ export async function saveAiKey(
   input: SaveKeyInput
 ): Promise<AiKeyItem> {
   const { provider, model } = input
-  const baseUrl = input.baseUrl?.trim() || null
+  let baseUrl = input.baseUrl?.trim() || null
   const rawApiKey = input.apiKey.trim()
   const label = input.label?.trim() || (input.isPrimary ? 'Primary Key' : 'Backup Key')
 
   if (!rawApiKey) {
     throw new Error('API Key cannot be empty')
+  }
+
+  // Ensure OpenAI-compatible endpoints have their proper base URL (e.g. Gemini, Groq, NVIDIA NIM)
+  if (provider === 'openai_compatible' && !baseUrl) {
+    const detected = detectProviderFromKey(rawApiKey)
+    if (detected.baseUrl) {
+      baseUrl = detected.baseUrl
+    }
   }
 
   // Validate the key with provider before persisting

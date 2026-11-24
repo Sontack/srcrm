@@ -92,6 +92,48 @@ describe('AI Auto-Detection', () => {
       expect(res.models).toContain('claude-3-5-haiku-latest');
       expect(res.recommendedModel).toBe('claude-3-5-haiku-latest');
     });
+
+    it('rejects invalid Google Gemini key with descriptive error', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { message: 'API key not valid. Please pass a valid API key.' },
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await expect(
+        fetchAvailableModels(
+          'openai_compatible',
+          'AIzaSyInvalidKey',
+          'https://generativelanguage.googleapis.com/v1beta/openai'
+        )
+      ).rejects.toThrow('API key not valid');
+    });
+
+    it('successfully queries Google Gemini chat models when key is valid', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'models/gemini-2.5-flash-lite' },
+            { id: 'models/gemini-2.0-flash' },
+            { id: 'models/text-embedding-004' },
+          ],
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await fetchAvailableModels(
+        'openai_compatible',
+        'AIzaSyValidKey',
+        'https://generativelanguage.googleapis.com/v1beta/openai'
+      );
+      expect(res.models).toContain('models/gemini-2.5-flash-lite');
+      expect(res.models).not.toContain('models/text-embedding-004');
+      expect(res.recommendedModel).toBe('models/gemini-2.5-flash-lite');
+    });
   });
 
   describe('autoDetectAiCredentials', () => {
@@ -99,6 +141,23 @@ describe('AI Auto-Detection', () => {
       const res = await autoDetectAiCredentials({ apiKey: '' });
       expect(res.ok).toBe(false);
       expect(res.error).toBeDefined();
+    });
+
+    it('returns ok: false and clear error message when Gemini key is rejected', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { message: 'API key not valid' },
+        }),
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await autoDetectAiCredentials({ apiKey: 'AIzaSyBadKey' });
+      expect(res.ok).toBe(false);
+      expect(res.providerName).toBe('Google Gemini');
+      expect(res.error).toContain('API key not valid');
+      expect(res.model).toBe('');
     });
 
     it('successfully detects and returns model for valid key', async () => {
