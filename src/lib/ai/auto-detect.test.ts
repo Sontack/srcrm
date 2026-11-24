@@ -57,6 +57,12 @@ describe('AI Auto-Detection', () => {
       expect(res.providerName).toBe('DeepSeek');
       expect(res.baseUrl).toBe('https://api.deepseek.com/v1');
     });
+
+    it('strips leading Bearer prefix when detecting provider', () => {
+      const res = detectProviderFromKey('Bearer sk-or-v1-abcdef123456');
+      expect(res.provider).toBe('openai_compatible');
+      expect(res.providerName).toBe('OpenRouter');
+    });
   });
 
   describe('fetchAvailableModels', () => {
@@ -134,6 +140,61 @@ describe('AI Auto-Detection', () => {
       expect(res.models).not.toContain('models/text-embedding-004');
       expect(res.recommendedModel).toBe('models/gemini-2.5-flash-lite');
     });
+
+    it('rejects invalid OpenRouter key via /auth/key check', async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/auth/key')) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({
+              error: { message: 'Invalid API key: this is not an OpenRouter API key.' },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ data: [] }) };
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      await expect(
+        fetchAvailableModels(
+          'openai_compatible',
+          'sk-or-invalid-key',
+          'https://openrouter.ai/api/v1'
+        )
+      ).rejects.toThrow('this is not an OpenRouter API key');
+    });
+
+    it('successfully queries OpenRouter models when /auth/key succeeds', async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/auth/key')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: { label: 'Valid OpenRouter Key' } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: 'google/gemini-2.5-flash' },
+              { id: 'openai/gpt-4o-mini' },
+            ],
+          }),
+        };
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await fetchAvailableModels(
+        'openai_compatible',
+        'sk-or-v1-valid-key',
+        'https://openrouter.ai/api/v1'
+      );
+      expect(res.models).toContain('google/gemini-2.5-flash');
+      expect(res.recommendedModel).toBe('google/gemini-2.5-flash');
+    });
   });
 
   describe('autoDetectAiCredentials', () => {
@@ -157,6 +218,65 @@ describe('AI Auto-Detection', () => {
       expect(res.ok).toBe(false);
       expect(res.providerName).toBe('Google Gemini');
       expect(res.error).toContain('API key not valid');
+      expect(res.model).toBe('');
+    });
+
+    it('rejects invalid OpenRouter key and does not claim success', async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/auth/key')) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({
+              error: { message: 'Invalid API key: this is not an OpenRouter API key.' },
+            }),
+          };
+        }
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { message: 'Unauthorized' } }),
+        };
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await autoDetectAiCredentials({ apiKey: 'sk-or-v1-badkey' });
+      expect(res.ok).toBe(false);
+      expect(res.providerName).toBe('OpenRouter');
+      expect(res.error).toContain('this is not an OpenRouter API key');
+      expect(res.model).toBe('');
+    });
+
+    it('does not falsely detect invalid OpenAI key as OpenRouter', async () => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('api.openai.com')) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({ error: { message: 'Incorrect API key provided' } }),
+          };
+        }
+        if (url.includes('/auth/key')) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({
+              error: { message: 'Invalid API key: this is not an OpenRouter API key.' },
+            }),
+          };
+        }
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({ error: { message: 'Unauthorized' } }),
+        };
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const res = await autoDetectAiCredentials({ apiKey: 'sk-proj-invalid-key' });
+      expect(res.ok).toBe(false);
+      expect(res.providerName).toBe('OpenAI');
+      expect(res.error).toContain('Incorrect API key provided');
       expect(res.model).toBe('');
     });
 

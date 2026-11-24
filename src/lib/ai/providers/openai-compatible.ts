@@ -122,6 +122,8 @@ export async function generateOpenAiCompatible(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://wacrm.app',
+        'X-Title': 'WACRM WhatsApp CRM',
       },
       body: JSON.stringify({
         model,

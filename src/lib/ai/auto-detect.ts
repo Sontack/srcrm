@@ -29,14 +29,14 @@ export function detectProviderFromKey(
   apiKey: string,
   userBaseUrl?: string
 ): { provider: AiProvider; providerName: string; baseUrl: string | null } {
-  const key = apiKey.trim();
+  const key = apiKey.trim().replace(/^Bearer\s+/i, '');
   const url = (userBaseUrl || '').trim();
 
   if (url) {
     let name = 'OpenAI-Compatible';
-    if (url.includes('googleapis.com')) name = 'Google Gemini';
+    if (url.includes('openrouter.ai')) name = 'OpenRouter';
+    else if (url.includes('googleapis.com')) name = 'Google Gemini';
     else if (url.includes('groq.com')) name = 'Groq';
-    else if (url.includes('openrouter.ai')) name = 'OpenRouter';
     else if (url.includes('nvidia.com')) name = 'NVIDIA NIM';
     else if (url.includes('deepseek.com')) name = 'DeepSeek';
     else if (url.includes('together.xyz')) name = 'Together AI';
@@ -44,6 +44,15 @@ export function detectProviderFromKey(
     else if (url.includes('localhost') || url.includes('127.0.0.1')) name = 'Local LLM (Ollama/vLLM)';
 
     return { provider: 'openai_compatible', providerName: name, baseUrl: url };
+  }
+
+  // OpenRouter (Universal AI Gateway - starts with sk-or-)
+  if (key.startsWith('sk-or-') || key.startsWith('sk-or_') || key.startsWith('sk_or_')) {
+    return {
+      provider: 'openai_compatible',
+      providerName: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    };
   }
 
   // Anthropic Claude
@@ -75,15 +84,6 @@ export function detectProviderFromKey(
       provider: 'openai_compatible',
       providerName: 'NVIDIA NIM',
       baseUrl: 'https://integrate.api.nvidia.com/v1',
-    };
-  }
-
-  // OpenRouter (Universal AI Gateway)
-  if (key.startsWith('sk-or-')) {
-    return {
-      provider: 'openai_compatible',
-      providerName: 'OpenRouter',
-      baseUrl: 'https://openrouter.ai/api/v1',
     };
   }
 
@@ -345,12 +345,34 @@ export async function fetchAvailableModels(
     };
   }
 
-  // C. OpenRouter
+  // C. OpenRouter (Universal AI Gateway)
   if (targetBaseUrl.includes('openrouter.ai')) {
     try {
+      // 1. Verify key authenticity via OpenRouter's dedicated /auth/key endpoint
+      const authRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'HTTP-Referer': 'https://wacrm.app',
+          'X-Title': 'WACRM AI Assistant',
+          'User-Agent': 'WACRM-AI-Assistant/1.0',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!authRes.ok) {
+        const errJson = await authRes.json().catch(() => null);
+        const errMsg =
+          errJson?.error?.message ||
+          `OpenRouter API rejected key with HTTP ${authRes.status}`;
+        throw new AiError(errMsg, { code: 'invalid_key', status: authRes.status });
+      }
+
+      // 2. Fetch models from OpenRouter endpoint
       const res = await fetch(`${targetBaseUrl}/models`, {
         headers: {
           Authorization: `Bearer ${key}`,
+          'HTTP-Referer': 'https://wacrm.app',
+          'X-Title': 'WACRM AI Assistant',
           'User-Agent': 'WACRM-AI-Assistant/1.0',
         },
         signal: AbortSignal.timeout(8000),
@@ -374,7 +396,7 @@ export async function fetchAvailableModels(
           ...allIds.filter((id) => !topPreferred.includes(id)),
         ].slice(0, 50);
 
-        const rec = sortedIds[0] || 'openai/gpt-4o-mini';
+        const rec = sortedIds[0] || 'google/gemini-2.5-flash';
         return {
           models: sortedIds,
           recommendedModel: rec,
@@ -387,23 +409,16 @@ export async function fetchAvailableModels(
         };
       } else {
         const errJson = await res.json().catch(() => null);
-        const errMsg = errJson?.error?.message || `OpenRouter API rejected key with HTTP ${res.status}`;
-        throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
+        const errMsg = errJson?.error?.message || `OpenRouter API rejected models request with HTTP ${res.status}`;
+        throw new AiError(errMsg, { code: 'network_error', status: res.status });
       }
     } catch (err: unknown) {
       if (err instanceof AiError) throw err;
+      throw new AiError(
+        `OpenRouter verification failed: ${err instanceof Error ? err.message : String(err)}`,
+        { code: 'network_error', status: 502 }
+      );
     }
-
-    return {
-      models: ['google/gemini-2.5-flash', 'openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct', 'deepseek/deepseek-chat'],
-      recommendedModel: 'google/gemini-2.5-flash',
-      modelsList: [
-        { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Fastest & low cost', recommended: true },
-        { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', description: 'Economical OpenAI model' },
-        { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', description: 'Open weights flagship' },
-        { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat', description: 'High reasoning efficiency' },
-      ],
-    };
   }
 
   // D. Groq
@@ -506,13 +521,14 @@ export async function fetchAvailableModels(
         };
       }
     } else {
-      const errJson = await res.json().catch(() => null);
+      const errJson = typeof res?.json === 'function' ? await res.json().catch(() => null) : null;
       const errMsg = errJson?.error?.message || `Endpoint rejected request with HTTP ${res.status}`;
       throw new AiError(errMsg, { code: 'invalid_key', status: res.status });
     }
   } catch (err: unknown) {
     if (err instanceof AiError) throw err;
     console.warn('[auto-detect] Failed to fetch models from OpenAI-compatible endpoint:', err);
+    throw err;
   }
 
   // Fallback if probe fails or is offline

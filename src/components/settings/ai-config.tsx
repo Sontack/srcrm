@@ -229,6 +229,7 @@ export function AiConfig() {
 
       setNewKeyDetecting(true);
       setNewKeyDetectionError(null);
+      setNewKeyDetectionSuccess(false);
 
       try {
         const res = await fetch('/api/ai/detect', {
@@ -276,6 +277,10 @@ export function AiConfig() {
           setNewKeyDetectionSuccess(false);
           const err = data.error || 'Failed to detect AI provider or validate API key';
           setNewKeyDetectionError(err);
+          setNewKeyDetectedProviderName('');
+          setNewKeyModel('');
+          setNewKeyModelsList([]);
+          setNewKeyAvailableModels([]);
           toast.error(err);
         }
       } catch {
@@ -627,11 +632,13 @@ export function AiConfig() {
         await fetchConfig();
       } else {
         const errMsg = data.error ?? 'Failed to save API key. Please check the key and provider.';
+        setNewKeyDetectionSuccess(false);
         setNewKeyDetectionError(errMsg);
         toast.error(errMsg);
       }
     } catch {
       const errMsg = 'Network error saving API key';
+      setNewKeyDetectionSuccess(false);
       setNewKeyDetectionError(errMsg);
       toast.error(errMsg);
     } finally {
@@ -1182,25 +1189,21 @@ export function AiConfig() {
                       </button>
                     </div>
 
-                    {/* Live Detection Feedback */}
-                    {newKeyDetecting && (
+                    {/* Live Detection Feedback - Mutually Exclusive */}
+                    {newKeyDetecting ? (
                       <div className="flex items-center gap-2 p-2.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary font-medium animate-pulse">
                         <Loader2 className="w-4 h-4 animate-spin text-primary" />
                         Auto-detecting provider and fetching models from API...
                       </div>
-                    )}
-
-                    {newKeyDetectionError && (
+                    ) : newKeyDetectionError ? (
                       <div className="flex items-start gap-2.5 p-3 rounded-lg border border-destructive/30 bg-destructive/10 text-xs text-destructive font-medium">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                         <div className="space-y-0.5">
-                          <div className="font-semibold">Detection &amp; Validation Failed</div>
+                          <div className="font-semibold">Validation Failed</div>
                           <div className="text-destructive/90">{newKeyDetectionError}</div>
                         </div>
                       </div>
-                    )}
-
-                    {newKeyDetectionSuccess && (
+                    ) : newKeyDetectionSuccess ? (
                       <div className="flex items-center justify-between p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="w-4 h-4 text-emerald-500" />
@@ -1212,7 +1215,7 @@ export function AiConfig() {
                           Key Validated
                         </Badge>
                       </div>
-                    )}
+                    ) : null}
                   </div>
 
                   {/* Auto-Populated Configuration Details */}
